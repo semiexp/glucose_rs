@@ -1,8 +1,19 @@
 use std::collections::VecDeque;
 
 use crate::clause::{ClauseDb, ClauseIdx, CLAUSE_UNDEF};
+use crate::constraint::{Constraint, ConstraintIdx};
 use crate::types::{LBool, Lit, Var, VAR_UNDEF};
 use crate::watch::{WatchList, Watcher};
+
+// ──────────────────────────────────────────────
+// ConflictReason
+// ──────────────────────────────────────────────
+/// Describes the source of a BCP conflict: either a clause or a non-clause constraint.
+#[derive(Clone, Copy, Debug)]
+pub enum ConflictReason {
+    Clause(ClauseIdx),
+    Constraint(ConstraintIdx),
+}
 
 // ──────────────────────────────────────────────
 // BoundedQueue: sliding-window average
@@ -244,6 +255,25 @@ pub struct Solver {
     // perm_diff for LBD computation
     perm_diff: Vec<u64>,
     perm_diff_timer: u64,
+
+    // ── Non-clause constraint framework ──────────────────────────────────
+    /// Registered constraints.  Stored as `Option` to allow the "take" pattern during
+    /// callbacks (temporarily remove so we can pass `&mut Solver` at the same time).
+    pub constraints: Vec<Option<Box<dyn Constraint>>>,
+    /// Per-literal watch lists for constraints: `constr_watches[lit.0]` contains the
+    /// indices of constraints that want to be notified when that literal becomes TRUE.
+    pub constr_watches: Vec<Vec<ConstraintIdx>>,
+    /// Per-variable undo lists: `undo_lists[var]` contains constraint indices that
+    /// registered for undo notification on this variable.
+    pub undo_lists: Vec<Vec<ConstraintIdx>>,
+    /// Per-variable constraint reason: `Some(ci)` when constraint `ci` propagated this var.
+    pub nc_reason: Vec<Option<ConstraintIdx>>,
+    /// Per-constraint pending propagation count (number of watched literals currently in
+    /// the propagation queue that have not yet been delivered to the constraint).
+    pub constr_pending: Vec<i32>,
+    /// The TRUE literal that caused the most recent failed `constraint_enqueue` call.
+    /// Set to `Lit::UNDEF` when not applicable.
+    pub enqueue_failure: Lit,
 }
 
 #[allow(dead_code)]
@@ -287,6 +317,12 @@ impl Solver {
             seen: Vec::new(),
             perm_diff: Vec::new(),
             perm_diff_timer: 0,
+            constraints: Vec::new(),
+            constr_watches: Vec::new(),
+            undo_lists: Vec::new(),
+            nc_reason: Vec::new(),
+            constr_pending: Vec::new(),
+            enqueue_failure: Lit::UNDEF,
         }
     }
 
@@ -308,6 +344,12 @@ impl Solver {
         self.watches_bin.grow(new_lits);
         self.order_heap.pos.push(HEAP_NONE);
 
+        // Grow constraint watch lists: two entries per variable (pos and neg literal)
+        self.constr_watches.push(Vec::new()); // Lit(2*v)   = positive lit
+        self.constr_watches.push(Vec::new()); // Lit(2*v+1) = negative lit
+        self.undo_lists.push(Vec::new());
+        self.nc_reason.push(None);
+
         self.order_heap.insert(v, &self.activity);
 
         v
@@ -325,13 +367,181 @@ impl Solver {
         self.assigns[v as usize]
     }
 
+    // ── Public constraint API ──────────────────────────────────────────
+
+    /// Value of a literal; convenience wrapper for constraint implementations.
+    pub fn value_of(&self, lit: Lit) -> LBool {
+        self.value_lit(lit)
+    }
+
+    /// Value of a variable; convenience wrapper for constraint implementations.
+    pub fn value_of_var(&self, v: Var) -> LBool {
+        self.value_var(v)
+    }
+
+    /// Current decision level; convenience wrapper for constraint implementations.
+    pub fn current_level(&self) -> usize {
+        self.decision_level()
+    }
+
+    /// Number of pending (not-yet-delivered) watched literals for constraint `ci`.
+    /// Constraints can use this for lazy propagation: skip expensive checks when > 0.
+    pub fn num_pending(&self, ci: ConstraintIdx) -> i32 {
+        self.constr_pending[ci]
+    }
+
+    /// Register `ci` to be notified (via `propagate`) when `lit` becomes TRUE.
+    pub fn add_watch(&mut self, lit: Lit, ci: ConstraintIdx) {
+        self.constr_watches[lit.0 as usize].push(ci);
+    }
+
+    /// Register `ci` to have `undo` called when `var` is backtracked.
+    pub fn register_undo(&mut self, var: Var, ci: ConstraintIdx) {
+        self.undo_lists[var as usize].push(ci);
+    }
+
+    /// Enqueue `lit` as TRUE on behalf of constraint `ci`.
+    /// Returns `false` if `lit` is already FALSE (conflict); in that case
+    /// `self.enqueue_failure` is set to the TRUE literal that conflicted (`!lit`).
+    pub fn constraint_enqueue(&mut self, lit: Lit, ci: ConstraintIdx) -> bool {
+        match self.value_lit(lit) {
+            LBool::True => true,
+            LBool::False => {
+                // !lit is the TRUE literal that conflicts with our attempt to set lit=TRUE
+                self.enqueue_failure = !lit;
+                false
+            }
+            LBool::Undef => {
+                let v = lit.var() as usize;
+                self.assigns[v] = if lit.is_neg() { LBool::False } else { LBool::True };
+                self.level[v] = self.decision_level() as u32;
+                self.reason[v] = CLAUSE_UNDEF;
+                self.nc_reason[v] = Some(ci);
+                self.trail.push(lit);
+                // Increment pending counts for constraints watching this literal
+                Self::add_num_pending_static(
+                    &self.constr_watches,
+                    &mut self.constr_pending,
+                    lit,
+                    1,
+                );
+                true
+            }
+        }
+    }
+
+    /// Add a non-clause constraint to the solver.  Must be called at decision level 0.
+    /// Calls `initialize` on the constraint and runs BCP; returns `false` if UNSAT.
+    pub fn add_constraint(&mut self, constraint: Box<dyn Constraint>) -> bool {
+        if !self.ok {
+            return false;
+        }
+        debug_assert_eq!(self.decision_level(), 0);
+
+        let ci = self.constraints.len();
+        self.constraints.push(Some(constraint));
+        self.constr_pending.push(0);
+
+        // initialize: uses "take" pattern so we can pass &mut self simultaneously
+        let mut c = self.constraints[ci].take().unwrap();
+        let ok = c.initialize(self, ci);
+        self.constraints[ci] = Some(c);
+
+        if !ok {
+            self.ok = false;
+            return false;
+        }
+
+        if self.propagate().is_some() {
+            self.ok = false;
+            return false;
+        }
+
+        true
+    }
+
+    // ── Internal helpers ───────────────────────────────────────────────
+
+    /// Increment or decrement pending counts for all constraints watching `lit`.
+    fn add_num_pending_static(
+        constr_watches: &[Vec<ConstraintIdx>],
+        constr_pending: &mut [i32],
+        lit: Lit,
+        delta: i32,
+    ) {
+        if constr_watches.is_empty() {
+            return;
+        }
+        let idx = lit.0 as usize;
+        if idx >= constr_watches.len() {
+            return;
+        }
+        for &ci in &constr_watches[idx] {
+            constr_pending[ci] += delta;
+        }
+    }
+
+    /// Drain pending counts for `p`'s constraint watches, then drain the rest of the queue.
+    /// Called when a clause conflict is detected (constraint loop is skipped for `p`).
+    fn drain_pending_for_clause_conflict(&mut self, p: Lit) {
+        // p's constraint watches were not processed (clause conflict found first)
+        let n = if (p.0 as usize) < self.constr_watches.len() {
+            self.constr_watches[p.0 as usize].len()
+        } else {
+            0
+        };
+        for k in 0..n {
+            let ci = self.constr_watches[p.0 as usize][k];
+            self.constr_pending[ci] -= 1;
+        }
+        // Drain remaining queue
+        while self.qhead < self.trail.len() {
+            let q = self.trail[self.qhead];
+            self.qhead += 1;
+            let m = if (q.0 as usize) < self.constr_watches.len() {
+                self.constr_watches[q.0 as usize].len()
+            } else {
+                0
+            };
+            for k in 0..m {
+                let ci = self.constr_watches[q.0 as usize][k];
+                self.constr_pending[ci] -= 1;
+            }
+        }
+    }
+
+    /// Drain pending counts for the rest of the queue (after a constraint conflict).
+    fn drain_pending_queue(&mut self) {
+        while self.qhead < self.trail.len() {
+            let q = self.trail[self.qhead];
+            self.qhead += 1;
+            let m = if (q.0 as usize) < self.constr_watches.len() {
+                self.constr_watches[q.0 as usize].len()
+            } else {
+                0
+            };
+            for k in 0..m {
+                let ci = self.constr_watches[q.0 as usize][k];
+                self.constr_pending[ci] -= 1;
+            }
+        }
+    }
+
     fn unchecked_enqueue(&mut self, lit: Lit, reason: ClauseIdx) {
         let v = lit.var() as usize;
         debug_assert!(self.assigns[v] == LBool::Undef);
         self.assigns[v] = if lit.is_neg() { LBool::False } else { LBool::True };
         self.level[v] = self.decision_level() as u32;
         self.reason[v] = reason;
+        self.nc_reason[v] = None;
         self.trail.push(lit);
+        // Increment pending counts for constraints watching this literal
+        Self::add_num_pending_static(
+            &self.constr_watches,
+            &mut self.constr_pending,
+            lit,
+            1,
+        );
     }
 
     fn attach_clause(&mut self, cref: ClauseIdx) {
@@ -373,26 +583,26 @@ impl Solver {
         let lit0 = self.db.clauses[cref as usize].lits[0];
         let v = lit0.var() as usize;
         self.value_lit(lit0) == LBool::True
+            && self.nc_reason[v].is_none()
             && self.reason[v] == cref
     }
 
     // ── BCP ────────────────────────────────────
-    fn propagate(&mut self) -> Option<ClauseIdx> {
-        let mut conflict: Option<ClauseIdx> = None;
-
+    fn propagate(&mut self) -> Option<ConflictReason> {
         while self.qhead < self.trail.len() {
             let p = self.trail[self.qhead];
             self.qhead += 1;
             self.propagations += 1;
             let false_lit = !p;
 
-            // Binary watches – clone to avoid borrow issues
+            // ── Binary clause watches ──────────────
             let bin_ws: Vec<Watcher> = self.watches_bin.get(false_lit).to_vec();
             for w in bin_ws {
                 match self.value_lit(w.blocker) {
                     LBool::True => {}
                     LBool::False => {
-                        return Some(w.cref);
+                        self.drain_pending_for_clause_conflict(p);
+                        return Some(ConflictReason::Clause(w.cref));
                     }
                     LBool::Undef => {
                         self.unchecked_enqueue(w.blocker, w.cref);
@@ -400,16 +610,16 @@ impl Solver {
                 }
             }
 
-            // Long clause watches – take the list to avoid aliasing
+            // ── Long clause watches ────────────────
             let mut ws = std::mem::take(self.watches.get_mut(false_lit));
             let mut i = 0usize;
             let mut j = 0usize;
+            let mut clause_conflict: Option<ClauseIdx> = None;
 
             'outer: while i < ws.len() {
                 let blocker = ws[i].blocker;
                 let cref = ws[i].cref;
 
-                // Skip deleted clauses
                 if self.db.clauses[cref as usize].header.deleted {
                     i += 1;
                     continue;
@@ -422,25 +632,19 @@ impl Solver {
                     continue;
                 }
 
-                // Ensure false_lit is at position 1
                 if self.db.clauses[cref as usize].lits[0] == false_lit {
                     self.db.clauses[cref as usize].lits.swap(0, 1);
                 }
 
                 let first = self.db.clauses[cref as usize].lits[0];
 
-                // If clause[0] is true, update blocker and keep
                 if self.value_lit(first) == LBool::True {
-                    ws[j] = Watcher {
-                        cref,
-                        blocker: first,
-                    };
+                    ws[j] = Watcher { cref, blocker: first };
                     j += 1;
                     i += 1;
                     continue;
                 }
 
-                // Search for new watch in clause[2..]
                 let cl_len = self.db.clauses[cref as usize].lits.len();
                 let mut new_watch: Option<usize> = None;
                 for k in 2..cl_len {
@@ -453,23 +657,17 @@ impl Solver {
                 if let Some(k) = new_watch {
                     self.db.clauses[cref as usize].lits.swap(1, k);
                     let new_lit = self.db.clauses[cref as usize].lits[1];
-                    let new_blocker = first;
-                    self.watches
-                        .add(new_lit, Watcher { cref, blocker: new_blocker });
-                    // Don't keep old watcher
+                    self.watches.add(new_lit, Watcher { cref, blocker: first });
                     i += 1;
                     continue 'outer;
                 }
 
-                // No new watch – unit or conflict
                 ws[j] = ws[i];
                 j += 1;
                 i += 1;
 
                 if self.value_lit(first) == LBool::False {
-                    // Conflict
-                    conflict = Some(cref);
-                    self.qhead = self.trail.len();
+                    clause_conflict = Some(cref);
                     while i < ws.len() {
                         ws[j] = ws[i];
                         j += 1;
@@ -484,12 +682,39 @@ impl Solver {
             ws.truncate(j);
             *self.watches.get_mut(false_lit) = ws;
 
-            if conflict.is_some() {
-                break;
+            if let Some(cref) = clause_conflict {
+                self.drain_pending_for_clause_conflict(p);
+                return Some(ConflictReason::Clause(cref));
+            }
+
+            // ── Constraint watches ─────────────────
+            let n_cw = if (p.0 as usize) < self.constr_watches.len() {
+                self.constr_watches[p.0 as usize].len()
+            } else {
+                0
+            };
+            for k in 0..n_cw {
+                let ci = self.constr_watches[p.0 as usize][k];
+                self.constr_pending[ci] -= 1;
+                self.enqueue_failure = Lit::UNDEF;
+
+                let mut c = self.constraints[ci].take().unwrap();
+                let ok = c.propagate(self, p, ci);
+                self.constraints[ci] = Some(c);
+
+                if !ok {
+                    // Decrement remaining constraint watches for p
+                    for l in (k + 1)..n_cw {
+                        let cl = self.constr_watches[p.0 as usize][l];
+                        self.constr_pending[cl] -= 1;
+                    }
+                    self.drain_pending_queue();
+                    return Some(ConflictReason::Constraint(ci));
+                }
             }
         }
 
-        conflict
+        None
     }
 
     // ── LBD computation ────────────────────────
@@ -523,11 +748,23 @@ impl Solver {
         abs_levels: u32,
         to_clear: &mut Vec<Var>,
     ) -> bool {
+        // Cannot minimize through constraint-propagated literals
+        if self.nc_reason[p.var() as usize].is_some() {
+            return false;
+        }
         let mut stack: Vec<Lit> = vec![p];
         let top = to_clear.len();
 
         while let Some(lit) = stack.pop() {
             let v = lit.var() as usize;
+            // Cannot minimize through constraint-propagated literals
+            if self.nc_reason[v].is_some() {
+                for i in top..to_clear.len() {
+                    self.seen[to_clear[i] as usize] = 0;
+                }
+                to_clear.truncate(top);
+                return false;
+            }
             let r = self.reason[v];
             if r == CLAUSE_UNDEF {
                 // Decision variable – cannot remove
@@ -544,7 +781,8 @@ impl Solver {
                 let lvl = self.level[qv];
                 if self.seen[qv] == 0 && lvl > 0 {
                     let qr = self.reason[qv];
-                    if qr != CLAUSE_UNDEF
+                    if self.nc_reason[qv].is_none()
+                        && qr != CLAUSE_UNDEF
                         && (Self::abstract_level(lvl) & abs_levels) != 0
                     {
                         self.seen[qv] = 3;
@@ -564,69 +802,143 @@ impl Solver {
     }
 
     // ── Conflict analysis (1-UIP) ──────────────
-    fn analyze(&mut self, mut conflict: ClauseIdx) -> (Vec<Lit>, u32) {
+    /// Analyse a conflict and produce a learnt clause plus a backtrack level.
+    ///
+    /// `initial_conflict` is either a clause or a non-clause constraint that detected
+    /// the conflict.  When constraints are involved, undo is called on constraint state
+    /// for every trail position that is "walked over" during the backward scan, mirroring
+    /// the C++ behaviour that maintains consistent constraint state for `calc_reason`.
+    fn analyze(&mut self, initial_conflict: ConflictReason) -> (Vec<Lit>, u32) {
         let current_level = self.decision_level() as u32;
         let mut learnt: Vec<Lit> = vec![Lit::UNDEF];
         let mut btlevel: u32 = 0;
         let mut path_c: i32 = 0;
         let mut p = Lit::UNDEF;
+        // C++ uses post-decrement: after loop, trail[index+1] is the found literal.
         let mut index = self.trail.len() as i32 - 1;
         let mut to_clear: Vec<Var> = Vec::new();
 
+        // Grab enqueue_failure once; clear it so it is not re-used.
+        let mut extra: Option<Lit> = if self.enqueue_failure == Lit::UNDEF {
+            None
+        } else {
+            Some(self.enqueue_failure)
+        };
+        self.enqueue_failure = Lit::UNDEF;
+
+        let mut confl = initial_conflict;
+
         loop {
-            let start_j: usize = if p == Lit::UNDEF { 0 } else { 1 };
+            match confl {
+                ConflictReason::Clause(cref) => {
+                    let start_j: usize = if p == Lit::UNDEF { 0 } else { 1 };
 
-            // For binary clauses used as reason: ensure p is at lits[0]
-            if p != Lit::UNDEF {
-                let cl_len = self.db.clauses[conflict as usize].lits.len();
-                if cl_len == 2 && self.db.clauses[conflict as usize].lits[0] != p {
-                    self.db.clauses[conflict as usize].lits.swap(0, 1);
+                    // For binary clauses used as reason: ensure p is at lits[0]
+                    if p != Lit::UNDEF {
+                        let cl_len = self.db.clauses[cref as usize].lits.len();
+                        if cl_len == 2 && self.db.clauses[cref as usize].lits[0] != p {
+                            self.db.clauses[cref as usize].lits.swap(0, 1);
+                        }
+                    }
+
+                    if self.db.clauses[cref as usize].header.learnt {
+                        self.cla_bump_activity(cref);
+                    }
+
+                    let cl_len = self.db.clauses[cref as usize].lits.len();
+                    for j in start_j..cl_len {
+                        // Clause lits[j] are FALSE literals (antecedents); push directly.
+                        let q = self.db.clauses[cref as usize].lits[j];
+                        let qv = q.var() as usize;
+                        let lvl = self.level[qv];
+                        if self.seen[qv] == 0 && lvl > 0 {
+                            self.var_bump_activity(q.var());
+                            self.seen[qv] = 1;
+                            to_clear.push(q.var());
+                            if lvl >= current_level {
+                                path_c += 1;
+                            } else {
+                                learnt.push(q);
+                                if lvl > btlevel {
+                                    btlevel = lvl;
+                                }
+                            }
+                        }
+                    }
                 }
-            }
+                ConflictReason::Constraint(ci) => {
+                    let p_opt = if p == Lit::UNDEF { None } else { Some(p) };
+                    let cur_extra = extra.take();
 
-            if self.db.clauses[conflict as usize].header.learnt {
-                self.cla_bump_activity(conflict);
-            }
+                    let mut reason_lits: Vec<Lit> = Vec::new();
+                    let mut c = self.constraints[ci].take().unwrap();
+                    c.calc_reason(self, p_opt, cur_extra, &mut reason_lits);
+                    self.constraints[ci] = Some(c);
 
-            let cl_len = self.db.clauses[conflict as usize].lits.len();
-            for j in start_j..cl_len {
-                let q = self.db.clauses[conflict as usize].lits[j];
-                let qv = q.var() as usize;
-                let lvl = self.level[qv];
-                if self.seen[qv] == 0 && lvl > 0 {
-                    self.var_bump_activity(q.var());
-                    self.seen[qv] = 1;
-                    to_clear.push(q.var());
-                    if lvl >= current_level {
-                        path_c += 1;
-                    } else {
-                        learnt.push(q);
-                        if lvl > btlevel {
-                            btlevel = lvl;
+                    // calc_reason returns TRUE literals; negate them for the learnt clause.
+                    for q in reason_lits {
+                        let qv = q.var() as usize;
+                        let lvl = self.level[qv];
+                        if self.seen[qv] == 0 && lvl > 0 {
+                            self.var_bump_activity(q.var());
+                            self.seen[qv] = 1;
+                            to_clear.push(q.var());
+                            if lvl >= current_level {
+                                path_c += 1;
+                            } else {
+                                learnt.push(!q); // negate: q is TRUE, !q is the FALSE antecedent
+                                if lvl > btlevel {
+                                    btlevel = lvl;
+                                }
+                            }
                         }
                     }
                 }
             }
 
-            // Find next seen literal on trail (walking backwards)
-            while index >= 0
-                && self.seen[self.trail[index as usize].var() as usize] == 0
-            {
+            // ── Scan backward for next seen literal; undo constraints along the way ──
+            // Mirrors C++: while (!seen[var(trail[index--])]);
+            // After the loop, trail[index+1] is the found literal.
+            let index_pre = index;
+            loop {
+                debug_assert!(index >= 0, "analyze: ran off the start of the trail");
+                let idx = index as usize;
+                let seen_val = self.seen[self.trail[idx].var() as usize];
                 index -= 1;
+                if seen_val != 0 {
+                    break;
+                }
             }
-            if index < 0 {
-                break;
+            // index+1 is the found position.  Undo constraints for all positions
+            // from index_pre down to index+1 (inclusive) — mirrors C++ undo loop.
+            // This includes the found literal itself, so calc_reason in the next
+            // iteration sees the constraint state *before* that literal was assigned.
+            for i in ((index + 1) as usize..=index_pre as usize).rev() {
+                let undo_lit = self.trail[i];
+                let undo_var = undo_lit.var() as usize;
+                // Drain the undo list (popping matches C++ `while undoLists[x].size() > 0`)
+                let entries: Vec<ConstraintIdx> = self.undo_lists[undo_var].drain(..).collect();
+                for &undo_ci in entries.iter().rev() {
+                    let mut c = self.constraints[undo_ci].take().unwrap();
+                    c.undo(self, undo_lit);
+                    self.constraints[undo_ci] = Some(c);
+                }
             }
-            p = self.trail[index as usize];
+
+            p = self.trail[(index + 1) as usize];
             self.seen[p.var() as usize] = 0;
             path_c -= 1;
-            index -= 1;
 
             if path_c <= 0 {
                 break;
             }
 
-            conflict = self.reason[p.var() as usize];
+            // Get the reason for the next p
+            confl = if let Some(ci) = self.nc_reason[p.var() as usize] {
+                ConflictReason::Constraint(ci)
+            } else {
+                ConflictReason::Clause(self.reason[p.var() as usize])
+            };
         }
 
         learnt[0] = !p;
@@ -641,7 +953,8 @@ impl Solver {
         for i in 1..learnt.len() {
             let lit = learnt[i];
             let v = lit.var() as usize;
-            if self.reason[v] == CLAUSE_UNDEF
+            if self.nc_reason[v].is_some()
+                || self.reason[v] == CLAUSE_UNDEF
                 || !self.lit_redundant(lit, abs_levels, &mut to_clear)
             {
                 learnt[j] = lit;
@@ -703,8 +1016,16 @@ impl Solver {
             self.polarity[v as usize] = lit.is_neg();
             self.assigns[v as usize] = LBool::Undef;
             self.reason[v as usize] = CLAUSE_UNDEF;
+            self.nc_reason[v as usize] = None;
             if !self.order_heap.contains(v) {
                 self.order_heap.insert(v, &self.activity);
+            }
+            // Notify constraints via undo (drain the list – each entry is called exactly once)
+            let entries: Vec<ConstraintIdx> = self.undo_lists[v as usize].drain(..).collect();
+            for &ci in entries.iter().rev() {
+                let mut c = self.constraints[ci].take().unwrap();
+                c.undo(self, lit);
+                self.constraints[ci] = Some(c);
             }
         }
         self.trail.truncate(trail_start);
@@ -856,7 +1177,7 @@ impl Solver {
         loop {
             let confl = self.propagate();
 
-            if let Some(conflict_cref) = confl {
+            if let Some(conflict_reason) = confl {
                 // ── Conflict ──
                 if self.decision_level() == 0 {
                     self.ok = false;
@@ -865,7 +1186,7 @@ impl Solver {
 
                 self.conflicts += 1;
 
-                let (learnt_lits, btlevel) = self.analyze(conflict_cref);
+                let (learnt_lits, btlevel) = self.analyze(conflict_reason);
                 let lbd = self.compute_lbd(&learnt_lits);
 
                 self.backtrack(btlevel as usize);
