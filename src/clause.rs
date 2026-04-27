@@ -1,6 +1,7 @@
 use crate::types::Lit;
 
 pub type ClauseIdx = u32;
+/// Sentinel value meaning "no clause" (analogous to `CRef_Undef` in C++ Glucose).
 pub const CLAUSE_UNDEF: ClauseIdx = u32::MAX;
 
 #[derive(Clone, Debug)]
@@ -15,6 +16,7 @@ pub struct ClauseHeader {
 pub struct Clause {
     pub header: ClauseHeader,
     pub lits: Vec<Lit>,
+    /// Clause activity used for learned-clause database reduction (VSIDS-style).
     pub activity: f32,
 }
 
@@ -33,6 +35,12 @@ impl Clause {
     }
 }
 
+/// Arena-style clause storage that owns all clauses and identifies them by a compact integer index.
+///
+/// Using integer indices (`ClauseIdx`) instead of pointers avoids lifetime and aliasing issues
+/// that arise when the solver needs mutable access to both clause data and watch lists simultaneously.
+/// This mirrors the `RegionAllocator`-based `ClauseAllocator` pattern in C++ Glucose
+/// (`core/SolverTypes.h`).
 pub struct ClauseDb {
     pub clauses: Vec<Clause>,
 }

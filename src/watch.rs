@@ -4,9 +4,20 @@ use crate::clause::ClauseIdx;
 #[derive(Clone, Copy, Debug)]
 pub struct Watcher {
     pub cref: ClauseIdx,
+    /// A "blocker" literal from the same clause used to short-circuit the watch check:
+    /// if `blocker` is already TRUE we can skip inspecting the clause entirely.
     pub blocker: Lit,
 }
 
+/// Per-literal watch lists for the two-watched-literals BCP scheme.
+///
+/// `watches[lit]` contains all clauses that are watching `lit`.  A clause with
+/// watches `w0` and `w1` is stored in both `watches[w0]` and `watches[w1]`.  When
+/// `lit` is assigned FALSE the propagation loop visits `watches[lit]` to find unit
+/// consequences or conflicts.
+///
+/// Corresponds to `OccLists<Lit, vec<Watcher>, WatcherDeleted>` in C++ Glucose
+/// (`core/Solver.h`).
 pub struct WatchList {
     watches: Vec<Vec<Watcher>>,
 }

@@ -1,3 +1,11 @@
+/// Parser for DIMACS CNF format files.
+///
+/// DIMACS CNF format:
+/// - Comment lines start with `c`
+/// - Problem line: `p cnf <num_vars> <num_clauses>`
+/// - Clause lines: space-separated nonzero integers ending in `0`
+///   - Positive integer `k` → positive occurrence of variable `k`
+///   - Negative integer `-k` → negative occurrence of variable `k`
 pub struct DimacsParser;
 
 pub struct ParsedCnf {
@@ -8,7 +16,7 @@ pub struct ParsedCnf {
 impl DimacsParser {
     pub fn parse(input: &str) -> Result<ParsedCnf, String> {
         let mut num_vars = 0usize;
-        let mut num_clauses = 0usize;
+        let mut _num_clauses = 0usize;
         let mut header_found = false;
         let mut clauses: Vec<Vec<i32>> = Vec::new();
 
@@ -28,7 +36,7 @@ impl DimacsParser {
                 num_vars = parts[2]
                     .parse()
                     .map_err(|_| format!("Invalid num_vars: {}", parts[2]))?;
-                num_clauses = parts[3]
+                _num_clauses = parts[3]
                     .parse()
                     .map_err(|_| format!("Invalid num_clauses: {}", parts[3]))?;
                 header_found = true;

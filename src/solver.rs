@@ -7,6 +7,13 @@ use crate::watch::{WatchList, Watcher};
 // ──────────────────────────────────────────────
 // BoundedQueue: sliding-window average
 // ──────────────────────────────────────────────
+/// A fixed-capacity sliding-window queue that tracks a running sum for fast average computation.
+///
+/// Used by the Glucose restart heuristic to maintain moving averages of:
+/// - LBD (Literal Block Distance) values of recently learned clauses (`lbd_queue`)
+/// - trail sizes at each restart opportunity (`trail_queue`)
+///
+/// Corresponds to `BoundedQueue` in C++ Glucose (`core/BoundedQueue.h`).
 struct BoundedQueue {
     elems: VecDeque<u32>,
     max_size: usize,
@@ -34,7 +41,13 @@ impl BoundedQueue {
         self.elems.len() == self.max_size
     }
 
+    /// Returns the sliding-window average. Panics if the queue is empty.
+    /// Always check `is_valid()` or `!is_empty()` before calling.
     fn avg(&self) -> f64 {
+        debug_assert!(!self.elems.is_empty(), "avg() called on empty BoundedQueue");
+        if self.elems.is_empty() {
+            return 0.0;
+        }
         self.sum as f64 / self.elems.len() as f64
     }
 
@@ -47,6 +60,12 @@ impl BoundedQueue {
 // ──────────────────────────────────────────────
 // OrderHeap: indexed binary max-heap by activity
 // ──────────────────────────────────────────────
+/// An indexed binary max-heap that orders variables by their VSIDS activity score.
+///
+/// Supports O(log n) insert/remove-max and O(log n) increase-key (used when a
+/// variable's activity is bumped during conflict analysis).
+///
+/// Corresponds to the `Heap<VarOrderLt>` field (`order_heap`) in C++ Glucose `Solver.h`.
 const HEAP_NONE: usize = usize::MAX;
 
 struct OrderHeap {
@@ -54,6 +73,7 @@ struct OrderHeap {
     pos: Vec<usize>,
 }
 
+#[allow(dead_code)]
 impl OrderHeap {
     fn new(n: usize) -> Self {
         OrderHeap {
@@ -202,6 +222,7 @@ pub struct Solver {
 
     // Clause DB reduction
     next_reduce_db: u64,
+    #[allow(dead_code)]
     first_reduce_db: u64,
     inc_reduce_db: u64,
 
@@ -225,6 +246,7 @@ pub struct Solver {
     perm_diff_timer: u64,
 }
 
+#[allow(dead_code)]
 impl Solver {
     pub fn new() -> Self {
         Solver {
