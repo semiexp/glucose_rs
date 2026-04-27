@@ -10,7 +10,7 @@ A complete Rust port of the [Glucose](https://www.labri.fr/perso/lsimon/glucose/
 - **Glucose restart heuristics** – LBD moving-average (K=0.8) vs trail-length blocking (R=1.4)
 - **LBD** (Literal Block Distance) scored learned clauses
 - **Phase saving** for decision polarity
-- **Deep clause minimisation** (ccmin\_mode = 2)
+- **Deep clause minimization** (ccmin\_mode = 2)
 - **Periodic learned-clause database reduction**
 - **DIMACS CNF** input parser
 

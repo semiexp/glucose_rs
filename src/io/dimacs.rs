@@ -55,11 +55,6 @@ impl DimacsParser {
         if !header_found {
             return Err("No problem line found".to_string());
         }
-        if clauses.len() != num_clauses {
-            // Accept minor mismatches (e.g. trailing empty clauses)
-            // but cap at declared count if over
-        }
-
         Ok(ParsedCnf { num_vars, clauses })
     }
 }
