@@ -169,7 +169,7 @@ fn test_at_most_sat() {
         .iter()
         .filter(|&&v| solver.model[v as usize] == LBool::True)
         .count();
-    assert!(n_true <= 1);
+    assert_eq!(n_true, 1); // exactly 1 must be true (constraint forces it)
     // At least one of x0, x1 must be true
     assert!(
         solver.model[x0 as usize] == LBool::True

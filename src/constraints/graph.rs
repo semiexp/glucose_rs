@@ -166,8 +166,9 @@ impl ActiveVerticesConnected {
                         self.subtree_active_count[nc] - self.subtree_active_count[v];
                     let mut n_nonempty_subgraph = 0;
 
-                    let adj_v = self.adj[v].clone();
-                    for w in adj_v {
+                    let adj_len = self.adj[v].len();
+                    for k in 0..adj_len {
+                        let w = self.adj[v][k];
                         if self.rank[v] < self.rank[w] && self.parent[w] == v as i32 {
                             // w is a child of v
                             if self.lowlink[w] < self.rank[v] {
@@ -396,7 +397,7 @@ impl Constraint for ActiveVerticesConnected {
             }
         }
         for v in 0..n {
-            for &w in &self.adj[v].clone() {
+            for &w in &self.adj[v] {
                 if activated[v] && activated[w] {
                     uf.merge(v, w);
                 }
@@ -437,8 +438,9 @@ impl Constraint for ActiveVerticesConnected {
             if self.state[v] == NodeState::Active {
                 uf.add_active_count(v, -1);
             }
-            let adj_v = self.adj[v].clone();
-            for w in adj_v {
+            let adj_len = self.adj[v].len();
+            for k in 0..adj_len {
+                let w = self.adj[v][k];
                 if activated[w] {
                     uf.merge(v, w);
                 }
