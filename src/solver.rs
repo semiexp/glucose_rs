@@ -1239,8 +1239,13 @@ impl Solver {
                 // Pick decision
                 match self.pick_branch_lit() {
                     None => {
-                        // All variables assigned – SAT
+                        // All variables assigned – SAT.
+                        // Save the model and backtrack to level 0 so that
+                        // callers can add new clauses (e.g. blocking clauses
+                        // for solution enumeration) without violating the
+                        // "add_clause requires decision level 0" invariant.
                         self.model = self.assigns.clone();
+                        self.backtrack(0);
                         return LBool::True;
                     }
                     Some(lit) => {
