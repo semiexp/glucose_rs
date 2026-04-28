@@ -1,6 +1,6 @@
 use crate::constraint::{Constraint, ConstraintIdx};
 use crate::solver::Solver;
-use crate::types::{LBool, Lit, Var};
+use crate::types::{LBool, Lit};
 
 /// AtMost(lits, threshold): at most `threshold` of the literals in `lits` can be TRUE.
 ///
