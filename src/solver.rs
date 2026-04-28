@@ -937,7 +937,21 @@ impl Solver {
             confl = if let Some(ci) = self.nc_reason[p.var() as usize] {
                 ConflictReason::Constraint(ci)
             } else {
-                ConflictReason::Clause(self.reason[p.var() as usize])
+                let cref = self.reason[p.var() as usize];
+                if cref == crate::clause::CLAUSE_UNDEF {
+                    // p is a decision literal but path_c > 0 — dump state
+                    eprintln!("BUG: p={:?} is a decision lit but path_c={} > 0", p, path_c);
+                    eprintln!("  level[p]={} current_level={}", self.level[p.var() as usize], current_level);
+                    eprintln!("  trail_lim={:?}", self.trail_lim);
+                    eprintln!("  trail positions with seen!=0:");
+                    for (i, &lit) in self.trail.iter().enumerate() {
+                        let v = lit.var() as usize;
+                        if self.seen[v] != 0 {
+                            eprintln!("    trail[{}]={:?} level={} seen={}", i, lit, self.level[v], self.seen[v]);
+                        }
+                    }
+                }
+                ConflictReason::Clause(cref)
             };
         }
 
