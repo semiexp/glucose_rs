@@ -1,0 +1,31 @@
+name: Run checks
+
+on:
+  push:
+    branches: ["main"]
+  pull_request: {}
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  styles:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - name: Setup environment
+      run: rustup update
+    - name: Run rustfmt
+      run: |
+        rustup component add rustfmt
+        cargo fmt --check
+  rust-x86-latest:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - name: Setup environment
+      run: rustup update
+    - name: Build
+      run: cargo build --verbose
+    - name: Run tests
+      run: cargo test --verbose
