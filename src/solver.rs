@@ -6,6 +6,8 @@ use crate::types::{LBool, Lit, Var, VAR_UNDEF};
 use crate::watch::{WatchList, Watcher};
 
 const RATIO_REMOVE_CLAUSES: usize = 2;
+const CONFLICTS_PER_VAR_DECAY_UPDATE: u64 = 5000;
+const VAR_DECAY_INCREMENT: f64 = 0.01;
 
 // ──────────────────────────────────────────────
 // ConflictReason
@@ -1188,8 +1190,10 @@ impl Solver {
 
         if !self.learnts.is_empty() {
             let idx = self.learnts.len() / RATIO_REMOVE_CLAUSES;
-            if self.db.clauses[self.learnts[idx] as usize].header.lbd <= 3 {
-                self.next_reduce_db += self.special_inc_reduce_db;
+            if let Some(&probe) = self.learnts.get(idx) {
+                if self.db.clauses[probe as usize].header.lbd <= 3 {
+                    self.next_reduce_db += self.special_inc_reduce_db;
+                }
             }
             if self.db.clauses[*self.learnts.last().unwrap() as usize].header.lbd <= 5 {
                 self.next_reduce_db += self.special_inc_reduce_db;
@@ -1221,6 +1225,8 @@ impl Solver {
                     self.db.clauses[cref as usize].header.deleted = true;
                 }
             } else {
+                // Protected clauses (`can_be_del == false`) do not consume the removal
+                // quota, so we extend the scan window exactly like Glucose.
                 if !can_be_del {
                     limit += 1;
                 }
@@ -1301,8 +1307,10 @@ impl Solver {
 
                 self.conflicts += 1;
                 self.conflicts_restarts += 1;
-                if self.conflicts % 5000 == 0 && self.var_decay < self.max_var_decay {
-                    self.var_decay = (self.var_decay + 0.01).min(self.max_var_decay);
+                if self.conflicts % CONFLICTS_PER_VAR_DECAY_UPDATE == 0
+                    && self.var_decay < self.max_var_decay
+                {
+                    self.var_decay = (self.var_decay + VAR_DECAY_INCREMENT).min(self.max_var_decay);
                 }
 
                 let (learnt_lits, btlevel) = self.analyze(conflict_reason);
