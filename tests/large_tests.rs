@@ -843,6 +843,15 @@ fn active_vertices_connected_count_bruteforce(
     lits: &[Lit],
     edges: &[(usize, usize)],
 ) -> usize {
+    assert!(n_vars < 64, "n_vars must be < 64 for bit-enumeration");
+    for &lit in lits {
+        assert!(
+            (lit.var() as usize) < n_vars,
+            "literal variable index out of range: var={} n_vars={n_vars}",
+            lit.var()
+        );
+    }
+
     (0u64..(1u64 << n_vars))
         .filter(|&bits| {
             let is_active = |lit: Lit| -> bool {
