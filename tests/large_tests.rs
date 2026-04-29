@@ -843,7 +843,7 @@ fn active_vertices_connected_count_bruteforce(
     lits: &[Lit],
     edges: &[(usize, usize)],
 ) -> usize {
-    assert!(n_vars < 64, "n_vars must be < 64 for bit-enumeration");
+    assert!(n_vars < 64, "n_vars must not exceed 63 for bit-enumeration");
     for &lit in lits {
         assert!(
             (lit.var() as usize) < n_vars,
