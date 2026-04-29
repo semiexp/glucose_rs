@@ -25,7 +25,16 @@ fn lcg_next(state: &mut u64) -> u64 {
 }
 
 fn lcg_range(state: &mut u64, upper: usize) -> usize {
-    (lcg_next(state) % upper as u64) as usize
+    let mut x = lcg_next(state);
+    let upper = upper as u64;
+    let t = u64::MAX / upper;
+    let threshold = t * upper;
+    loop {
+        if x < threshold {
+            return (x / t) as usize;
+        }
+        x = lcg_next(state);
+    }
 }
 
 const SAT_STRESS_FREE_VARS: usize = 4;
