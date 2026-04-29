@@ -9,6 +9,27 @@ use glucose_rs::constraints::graph_division::OptionalOrderEncoding;
 
 // ── Core helpers ──────────────────────────────────────────────────────────────
 
+fn stress_test_rounds() -> usize {
+    std::env::var("GLUCOSE_RS_STRESS_ROUNDS")
+        .ok()
+        .and_then(|s| s.parse::<usize>().ok())
+        .filter(|&n| n > 0)
+        .unwrap_or(5)
+}
+
+fn lcg_next(state: &mut u64) -> u64 {
+    *state = state
+        .wrapping_mul(6364136223846793005)
+        .wrapping_add(1442695040888963407);
+    *state
+}
+
+fn lcg_range(state: &mut u64, upper: usize) -> usize {
+    (lcg_next(state) % upper as u64) as usize
+}
+
+const SAT_STRESS_FREE_VARS: usize = 4;
+
 /// Enumerate all solutions over `vars` by iteratively blocking each found solution.
 fn count_num_assignments(solver: &mut Solver, vars: &[u32]) -> usize {
     let mut count = 0;
@@ -773,6 +794,41 @@ fn enumerate_connected_subgraph_by_sat(n: usize, edges: &[(usize, usize)]) -> us
     count_num_assignments(&mut solver, &vars)
 }
 
+fn enumerate_connected_subgraph_bruteforce(n: usize, edges: &[(usize, usize)]) -> usize {
+    (0u64..(1u64 << n))
+        .filter(|&bits| {
+            let active_cnt = (0..n).filter(|&v| ((bits >> v) & 1) == 1).count();
+            if active_cnt <= 1 {
+                return true;
+            }
+            let start = (0..n).find(|&v| ((bits >> v) & 1) == 1).unwrap();
+            let mut seen = vec![false; n];
+            let mut queue = std::collections::VecDeque::new();
+            seen[start] = true;
+            queue.push_back(start);
+            while let Some(u) = queue.pop_front() {
+                for &(v, w) in edges {
+                    let next = if v == u {
+                        w
+                    } else if w == u {
+                        v
+                    } else {
+                        continue;
+                    };
+                    if ((bits >> next) & 1) == 0 || seen[next] {
+                        continue;
+                    }
+                    seen[next] = true;
+                    queue.push_back(next);
+                }
+            }
+            (0..n)
+                .filter(|&v| ((bits >> v) & 1) == 1)
+                .all(|v| seen[v])
+        })
+        .count()
+}
+
 /// For a path of n vertices, connected subsets are contiguous sub-paths plus the empty set.
 /// Count = n*(n+1)/2 + 1.
 fn connected_subgraph_test_path(n: usize) {
@@ -830,6 +886,85 @@ fn test_graph_propagation_on_init() {
     );
 }
 
+#[test]
+fn test_stress_random_sat_16_to_20vars() {
+    let rounds = stress_test_rounds();
+    let mut seed = 0x5a9du64;
+
+    for round in 0..rounds {
+        let n_vars = 16 + (round % 5);
+        let n_clauses = n_vars * 4;
+        let planted_assignment: Vec<bool> = (0..n_vars).map(|_| lcg_range(&mut seed, 2) == 0).collect();
+
+        let mut clauses = Vec::new();
+        for _ in 0..n_clauses {
+            let v0 = lcg_range(&mut seed, n_vars);
+            let v1 = lcg_range(&mut seed, n_vars);
+            let v2 = lcg_range(&mut seed, n_vars);
+            let mut neg0 = lcg_range(&mut seed, 2) == 0;
+            let neg1 = lcg_range(&mut seed, 2) == 0;
+            let neg2 = lcg_range(&mut seed, 2) == 0;
+            // If all three literals are false under the planted assignment
+            // (var_value == is_negated), flipping one
+            // literal (here the first) is enough to make the whole clause satisfiable.
+            if planted_assignment[v0] == neg0
+                && planted_assignment[v1] == neg1
+                && planted_assignment[v2] == neg2
+            {
+                neg0 = !planted_assignment[v0];
+            }
+            clauses.push([(v0, neg0), (v1, neg1), (v2, neg2)]);
+        }
+        // Fix all but SAT_STRESS_FREE_VARS variables to shrink the model space while
+        // still requiring full enumeration on 16..20 variables.
+        for v in SAT_STRESS_FREE_VARS..n_vars {
+            clauses.push([
+                (v, !planted_assignment[v]),
+                (v, !planted_assignment[v]),
+                (v, !planted_assignment[v]),
+            ]);
+        }
+
+        let expected = brute_force_count(n_vars, &clauses);
+
+        let mut solver = Solver::new();
+        let vars: Vec<u32> = (0..n_vars).map(|_| solver.new_var()).collect();
+        for &[(v0, n0), (v1, n1), (v2, n2)] in &clauses {
+            solver.add_clause(&[
+                Lit::new(vars[v0], n0),
+                Lit::new(vars[v1], n1),
+                Lit::new(vars[v2], n2),
+            ]);
+        }
+        let actual = count_num_assignments(&mut solver, &vars);
+        assert_eq!(
+            expected, actual,
+            "round={round} n_vars={n_vars} n_clauses={n_clauses}"
+        );
+    }
+}
+
+#[test]
+fn test_stress_active_vertices_connected() {
+    let rounds = stress_test_rounds();
+    let mut seed = 0x3344_7788u64;
+
+    for round in 0..rounds {
+        let n = 8 + lcg_range(&mut seed, 5);
+        let mut edges = Vec::new();
+        for u in 0..n {
+            for v in u + 1..n {
+                if lcg_range(&mut seed, 3) == 0 {
+                    edges.push((u, v));
+                }
+            }
+        }
+        let expected = enumerate_connected_subgraph_bruteforce(n, &edges);
+        let actual = enumerate_connected_subgraph_by_sat(n, &edges);
+        assert_eq!(expected, actual, "round={round} n={n}");
+    }
+}
+
 // ── GraphDivision tests ───────────────────────────────────────────────────────
 
 fn enumerate_graph_division_by_sat(
@@ -856,6 +991,10 @@ fn enumerate_graph_division_by_sat(
             let lits: Vec<Lit> = (1..size_cands[i].len())
                 .map(|_| Lit::new(solver.new_var(), false))
                 .collect();
+            // Monotonicity for order encoding: (x >= values[j+1]) => (x >= values[j]).
+            for j in 1..lits.len() {
+                solver.add_clause(&[!lits[j], lits[j - 1]]);
+            }
             vertices[i].lits = lits;
             vertices[i].values = size_cands[i].clone();
         }
@@ -1052,5 +1191,53 @@ fn test_graph_division_out_of_range() {
         solver.add_constraint(Box::new(c));
         assert_eq!(solver.solve(), LBool::False,
             "vertex requiring size 3 with max reachable 2 must be UNSAT");
+    }
+}
+
+#[test]
+fn test_stress_graph_division() {
+    let rounds = stress_test_rounds();
+    let mut seed = 0x1020_3040u64;
+
+    for round in 0..rounds {
+        let n = 5 + lcg_range(&mut seed, 3);
+        let mut edge_used = vec![vec![false; n]; n];
+        let mut graph = Vec::new();
+        for i in 0..n.saturating_sub(1) {
+            edge_used[i][i + 1] = true;
+            edge_used[i + 1][i] = true;
+            graph.push((i, i + 1));
+        }
+        let max_edges = std::cmp::min(n * (n - 1) / 2, 11);
+        let target_edges = (n - 1) + lcg_range(&mut seed, max_edges - (n - 1) + 1);
+        while graph.len() < target_edges {
+            let a = lcg_range(&mut seed, n);
+            let b = lcg_range(&mut seed, n - 1);
+            let b = if b >= a { b + 1 } else { b };
+            let (u, v) = if a < b { (a, b) } else { (b, a) };
+            if edge_used[u][v] {
+                continue;
+            }
+            edge_used[u][v] = true;
+            edge_used[v][u] = true;
+            graph.push((u, v));
+        }
+
+        let mut size_cands = vec![Vec::new(); n];
+        let max_size_cand = std::cmp::min(n, 4);
+        for cand in &mut size_cands {
+            if lcg_range(&mut seed, 2) == 0 {
+                continue;
+            }
+            *cand = vec![(1 + lcg_range(&mut seed, max_size_cand)) as i32];
+        }
+
+        let expected = enumerate_graph_division_naive(n, &graph, &size_cands);
+        let actual = enumerate_graph_division_by_sat(n, &graph, &size_cands);
+        assert_eq!(
+            expected, actual,
+            "round={round} n={n} edges={} size_cands={size_cands:?}",
+            graph.len()
+        );
     }
 }
