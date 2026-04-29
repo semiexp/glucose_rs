@@ -1209,7 +1209,7 @@ fn test_stress_graph_division() {
     let mut seed = 0x1020_3040u64;
 
     for round in 0..rounds {
-        let n = 5 + lcg_range(&mut seed, 3);
+        let n = 5 + lcg_range(&mut seed, 5);
         let mut edge_used = vec![vec![false; n]; n];
         let mut graph = Vec::new();
         for i in 0..n.saturating_sub(1) {
@@ -1217,7 +1217,7 @@ fn test_stress_graph_division() {
             edge_used[i + 1][i] = true;
             graph.push((i, i + 1));
         }
-        let max_edges = std::cmp::min(n * (n - 1) / 2, 11);
+        let max_edges = std::cmp::min(n * (n - 1) / 2, 15);
         let target_edges = (n - 1) + lcg_range(&mut seed, max_edges - (n - 1) + 1);
         while graph.len() < target_edges {
             let a = lcg_range(&mut seed, n);
