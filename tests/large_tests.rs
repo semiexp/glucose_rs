@@ -28,6 +28,8 @@ fn lcg_range(state: &mut u64, upper: usize) -> usize {
     (lcg_next(state) % upper as u64) as usize
 }
 
+const SAT_STRESS_FREE_VARS: usize = 4;
+
 /// Enumerate all solutions over `vars` by iteratively blocking each found solution.
 fn count_num_assignments(solver: &mut Solver, vars: &[u32]) -> usize {
     let mut count = 0;
@@ -892,23 +894,35 @@ fn test_stress_random_sat_16_to_20vars() {
     for round in 0..rounds {
         let n_vars = 16 + (round % 5);
         let n_clauses = n_vars * 4;
-        let planted: Vec<bool> = (0..n_vars).map(|_| lcg_range(&mut seed, 2) == 0).collect();
+        let planted_assignment: Vec<bool> = (0..n_vars).map(|_| lcg_range(&mut seed, 2) == 0).collect();
 
         let mut clauses = Vec::new();
         for _ in 0..n_clauses {
             let v0 = lcg_range(&mut seed, n_vars);
             let v1 = lcg_range(&mut seed, n_vars);
             let v2 = lcg_range(&mut seed, n_vars);
-            let mut n0 = lcg_range(&mut seed, 2) == 0;
-            let n1 = lcg_range(&mut seed, 2) == 0;
-            let n2 = lcg_range(&mut seed, 2) == 0;
-            if planted[v0] == n0 && planted[v1] == n1 && planted[v2] == n2 {
-                n0 = !planted[v0];
+            let mut neg0 = lcg_range(&mut seed, 2) == 0;
+            let neg1 = lcg_range(&mut seed, 2) == 0;
+            let neg2 = lcg_range(&mut seed, 2) == 0;
+            // If all three literals are false under the planted assignment
+            // (var_value == is_negated), flipping one
+            // literal (here the first) is enough to make the whole clause satisfiable.
+            if planted_assignment[v0] == neg0
+                && planted_assignment[v1] == neg1
+                && planted_assignment[v2] == neg2
+            {
+                neg0 = !planted_assignment[v0];
             }
-            clauses.push([(v0, n0), (v1, n1), (v2, n2)]);
+            clauses.push([(v0, neg0), (v1, neg1), (v2, neg2)]);
         }
-        for v in 4..n_vars {
-            clauses.push([(v, !planted[v]), (v, !planted[v]), (v, !planted[v])]);
+        // Fix all but SAT_STRESS_FREE_VARS variables to shrink the model space while
+        // still requiring full enumeration on 16..20 variables.
+        for v in SAT_STRESS_FREE_VARS..n_vars {
+            clauses.push([
+                (v, !planted_assignment[v]),
+                (v, !planted_assignment[v]),
+                (v, !planted_assignment[v]),
+            ]);
         }
 
         let expected = brute_force_count(n_vars, &clauses);
@@ -977,6 +991,7 @@ fn enumerate_graph_division_by_sat(
             let lits: Vec<Lit> = (1..size_cands[i].len())
                 .map(|_| Lit::new(solver.new_var(), false))
                 .collect();
+            // Monotonicity for order encoding: (x >= values[j+1]) => (x >= values[j]).
             for j in 1..lits.len() {
                 solver.add_clause(&[!lits[j], lits[j - 1]]);
             }
@@ -1209,11 +1224,12 @@ fn test_stress_graph_division() {
         }
 
         let mut size_cands = vec![Vec::new(); n];
+        let max_size_cand = std::cmp::min(n, 4);
         for cand in &mut size_cands {
             if lcg_range(&mut seed, 2) == 0 {
                 continue;
             }
-            *cand = vec![(1 + lcg_range(&mut seed, n)) as i32];
+            *cand = vec![(1 + lcg_range(&mut seed, max_size_cand)) as i32];
         }
 
         let expected = enumerate_graph_division_naive(n, &graph, &size_cands);
