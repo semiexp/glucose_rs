@@ -373,6 +373,7 @@ impl Constraint for ActiveVerticesConnected {
         // vertex's state needs to be temporarily set for the reasoning.
         let temp_push = p.is_none() && self.conflict_cause_pos != -1;
         if temp_push {
+            debug_assert_eq!(extra, Some(self.conflict_cause_lit));
             let pos = self.conflict_cause_pos as usize;
             self.decision_order.push(pos);
             if self.conflict_cause_lit == self.lits[pos] {
@@ -403,24 +404,11 @@ impl Constraint for ActiveVerticesConnected {
                 }
             }
         }
-        // Add extra vertex
-        if let Some(extra_lit) = extra {
+        // Add all vertices corresponding to ~p (if p exists).
+        if let Some(pl) = p {
             for i in 0..n {
-                if !self.lits[i].is_neg() == !extra_lit.is_neg()
-                    && self.lits[i].var() == extra_lit.var()
-                {
-                    // This is the "extra" vertex (~p)
+                if self.lits[i] == !pl {
                     uf.add_active_count(i, 1);
-                    break;
-                }
-            }
-        }
-        // Also: if p is None, add the conflict_cause vertex
-        if p.is_none() {
-            for i in 0..n {
-                if self.lits[i] == !extra.unwrap_or(Lit::UNDEF) {
-                    uf.add_active_count(i, 1);
-                    break;
                 }
             }
         }
