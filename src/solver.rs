@@ -618,6 +618,7 @@ impl Solver {
 
     // ── BCP ────────────────────────────────────
     fn propagate(&mut self) -> Option<ConflictReason> {
+        let mut bin_ws = vec![];
         while self.qhead < self.trail.len() {
             let p = self.trail[self.qhead];
             self.qhead += 1;
@@ -625,11 +626,12 @@ impl Solver {
             let false_lit = !p;
 
             // ── Binary clause watches ──────────────
-            let bin_ws: Vec<Watcher> = self.watches_bin.get(false_lit).to_vec();
-            for w in bin_ws {
+            std::mem::swap(&mut bin_ws, self.watches_bin.get_mut(false_lit));
+            for &w in &bin_ws {
                 match self.value_lit(w.blocker) {
                     LBool::True => {}
                     LBool::False => {
+                        std::mem::swap(&mut bin_ws, self.watches_bin.get_mut(false_lit));
                         self.drain_pending_for_clause_conflict(p);
                         return Some(ConflictReason::Clause(w.cref));
                     }
@@ -638,6 +640,7 @@ impl Solver {
                     }
                 }
             }
+            std::mem::swap(&mut bin_ws, self.watches_bin.get_mut(false_lit));
 
             // ── Long clause watches ────────────────
             let mut ws = std::mem::take(self.watches.get_mut(false_lit));
@@ -954,8 +957,7 @@ impl Solver {
                 let undo_lit = self.trail[i];
                 let undo_var = undo_lit.var() as usize;
                 // Drain the undo list (popping matches C++ `while undoLists[x].size() > 0`)
-                let entries: Vec<ConstraintIdx> = self.undo_lists[undo_var].drain(..).collect();
-                for &undo_ci in entries.iter().rev() {
+                while let Some(undo_ci) = self.undo_lists[undo_var].pop() {
                     let mut c = self.constraints[undo_ci].take().unwrap();
                     c.undo(self, undo_lit);
                     self.constraints[undo_ci] = Some(c);
@@ -1058,8 +1060,7 @@ impl Solver {
                 self.order_heap.insert(v, &self.activity);
             }
             // Notify constraints via undo (drain the list – each entry is called exactly once)
-            let entries: Vec<ConstraintIdx> = self.undo_lists[v as usize].drain(..).collect();
-            for &ci in entries.iter().rev() {
+            while let Some(ci) = self.undo_lists[v as usize].pop() {
                 let mut c = self.constraints[ci].take().unwrap();
                 c.undo(self, lit);
                 self.constraints[ci] = Some(c);
