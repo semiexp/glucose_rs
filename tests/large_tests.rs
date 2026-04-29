@@ -838,6 +838,62 @@ fn enumerate_connected_subgraph_bruteforce(n: usize, edges: &[(usize, usize)]) -
         .count()
 }
 
+fn active_vertices_connected_count_bruteforce(
+    n_vars: usize,
+    lits: &[Lit],
+    edges: &[(usize, usize)],
+) -> usize {
+    (0u64..(1u64 << n_vars))
+        .filter(|&bits| {
+            let is_active = |lit: Lit| -> bool {
+                let val = ((bits >> lit.var()) & 1) == 1;
+                if lit.is_neg() { !val } else { val }
+            };
+            let active_vertices: Vec<usize> = (0..lits.len())
+                .filter(|&i| is_active(lits[i]))
+                .collect();
+            if active_vertices.len() <= 1 {
+                return true;
+            }
+
+            let start = active_vertices[0];
+            let mut seen = vec![false; lits.len()];
+            let mut queue = std::collections::VecDeque::new();
+            seen[start] = true;
+            queue.push_back(start);
+            while let Some(u) = queue.pop_front() {
+                for &(v, w) in edges {
+                    let next = if v == u {
+                        w
+                    } else if w == u {
+                        v
+                    } else {
+                        continue;
+                    };
+                    if !is_active(lits[next]) || seen[next] {
+                        continue;
+                    }
+                    seen[next] = true;
+                    queue.push_back(next);
+                }
+            }
+
+            active_vertices.into_iter().all(|v| seen[v])
+        })
+        .count()
+}
+
+fn active_vertices_connected_count_sat(n_vars: usize, lits: Vec<Lit>, edges: &[(usize, usize)]) -> usize {
+    let mut solver = Solver::new();
+    let vars: Vec<u32> = (0..n_vars).map(|_| solver.new_var()).collect();
+    let mapped_lits: Vec<Lit> = lits
+        .into_iter()
+        .map(|lit| Lit::new(vars[lit.var() as usize], lit.is_neg()))
+        .collect();
+    solver.add_constraint(Box::new(ActiveVerticesConnected::new(mapped_lits, edges)));
+    count_num_assignments(&mut solver, &vars)
+}
+
 /// For a path of n vertices, connected subsets are contiguous sub-paths plus the empty set.
 /// Count = n*(n+1)/2 + 1.
 fn connected_subgraph_test_path(n: usize) {
@@ -893,6 +949,36 @@ fn test_graph_propagation_on_init() {
         !solver.add_clause(&[Lit::new(vars[4], false)]),
         "Forcing var4=active should be UNSAT after var2=inactive is set"
     );
+}
+
+#[test]
+fn test_graph_duplicate_literal_count_regression() {
+    let n_vars = 4;
+    let lits = vec![
+        Lit::new(0, false),
+        Lit::new(1, false),
+        Lit::new(2, false),
+        Lit::new(3, false),
+        Lit::new(0, false),
+        Lit::new(0, false),
+        Lit::new(1, true),
+    ];
+    let edges = vec![
+        (0, 1),
+        (0, 2),
+        (0, 3),
+        (0, 6),
+        (1, 5),
+        (2, 3),
+        (2, 4),
+        (3, 4),
+        (4, 6),
+        (5, 6),
+    ];
+
+    let expected = active_vertices_connected_count_bruteforce(n_vars, &lits, &edges);
+    let actual = active_vertices_connected_count_sat(n_vars, lits.clone(), &edges);
+    assert_eq!(expected, actual);
 }
 
 #[test]
