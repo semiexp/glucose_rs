@@ -1,10 +1,9 @@
+use glucose_rs::constraints::order_encoding_linear::LinearTerm;
+use glucose_rs::constraints::{
+    ActiveVerticesConnected, AtMost, DirectEncodingExtensionSupports, OrderEncodingLinear, Xor,
+};
 use glucose_rs::solver::Solver;
 use glucose_rs::types::{LBool, Lit};
-use glucose_rs::constraints::{
-    AtMost, Xor, OrderEncodingLinear, DirectEncodingExtensionSupports,
-    ActiveVerticesConnected,
-};
-use glucose_rs::constraints::order_encoding_linear::LinearTerm;
 
 fn make_lit(var: u32, neg: bool) -> Lit {
     Lit::new(var, neg)
@@ -61,21 +60,9 @@ fn test_3sat_solvable() {
         make_lit(x2, false),
         make_lit(x3, false),
     ]);
-    solver.add_clause(&[
-        make_lit(x1, true),
-        make_lit(x2, false),
-        make_lit(x3, false),
-    ]);
-    solver.add_clause(&[
-        make_lit(x1, false),
-        make_lit(x2, true),
-        make_lit(x3, false),
-    ]);
-    solver.add_clause(&[
-        make_lit(x1, false),
-        make_lit(x2, false),
-        make_lit(x3, true),
-    ]);
+    solver.add_clause(&[make_lit(x1, true), make_lit(x2, false), make_lit(x3, false)]);
+    solver.add_clause(&[make_lit(x1, false), make_lit(x2, true), make_lit(x3, false)]);
+    solver.add_clause(&[make_lit(x1, false), make_lit(x2, false), make_lit(x3, true)]);
 
     assert_eq!(solver.solve(), LBool::True);
 }
@@ -114,10 +101,7 @@ fn test_php32_unsat() {
     for j in 0..2 {
         for i1 in 0..3 {
             for i2 in (i1 + 1)..3 {
-                solver.add_clause(&[
-                    make_lit(vars[i1][j], true),
-                    make_lit(vars[i2][j], true),
-                ]);
+                solver.add_clause(&[make_lit(vars[i1][j], true), make_lit(vars[i2][j], true)]);
             }
         }
     }
@@ -155,7 +139,11 @@ fn test_at_most_sat() {
     let x2 = solver.new_var();
 
     let c = AtMost::new(
-        vec![make_lit(x0, false), make_lit(x1, false), make_lit(x2, false)],
+        vec![
+            make_lit(x0, false),
+            make_lit(x1, false),
+            make_lit(x2, false),
+        ],
         1,
     );
     assert!(solver.add_constraint(Box::new(c)));
@@ -170,11 +158,8 @@ fn test_at_most_sat() {
         .filter(|&&v| solver.model[v as usize] == LBool::True)
         .count();
     assert_eq!(n_true, 1); // exactly 1 must be true (constraint forces it)
-    // At least one of x0, x1 must be true
-    assert!(
-        solver.model[x0 as usize] == LBool::True
-            || solver.model[x1 as usize] == LBool::True
-    );
+                           // At least one of x0, x1 must be true
+    assert!(solver.model[x0 as usize] == LBool::True || solver.model[x1 as usize] == LBool::True);
 }
 
 #[test]
@@ -206,7 +191,11 @@ fn test_xor_sat() {
     let x2 = solver.new_var();
 
     let c = Xor::new(
-        &[make_lit(x0, false), make_lit(x1, false), make_lit(x2, false)],
+        &[
+            make_lit(x0, false),
+            make_lit(x1, false),
+            make_lit(x2, false),
+        ],
         1,
     );
     assert!(solver.add_constraint(Box::new(c)));
@@ -255,7 +244,11 @@ fn test_order_encoding_linear_sat() {
 
     // lits[i] <=> (x >= domain[i+1])
     let term = LinearTerm {
-        lits: vec![make_lit(l0, false), make_lit(l1, false), make_lit(l2, false)],
+        lits: vec![
+            make_lit(l0, false),
+            make_lit(l1, false),
+            make_lit(l2, false),
+        ],
         domain: vec![0, 1, 2, 3],
         coef: 1,
     };
@@ -323,8 +316,16 @@ fn test_direct_encoding_extension_sat() {
     assert_eq!(solver.solve(), LBool::True);
 
     // Model must have var0 == var1 (both 0 or both 1)
-    let var0_val = if solver.model[x0 as usize] == LBool::True { 0 } else { 1 };
-    let var1_val = if solver.model[x2 as usize] == LBool::True { 0 } else { 1 };
+    let var0_val = if solver.model[x0 as usize] == LBool::True {
+        0
+    } else {
+        1
+    };
+    let var1_val = if solver.model[x2 as usize] == LBool::True {
+        0
+    } else {
+        1
+    };
     assert_eq!(var0_val, var1_val);
 }
 

@@ -15,7 +15,11 @@ impl AtMost {
     pub fn new(mut lits: Vec<Lit>, threshold: i32) -> Self {
         lits.sort();
         lits.dedup();
-        AtMost { lits, threshold, n_true: 0 }
+        AtMost {
+            lits,
+            threshold,
+            n_true: 0,
+        }
     }
 }
 
@@ -37,9 +41,7 @@ impl Constraint for AtMost {
         }
         if self.n_true == self.threshold {
             for &lit in &self.lits {
-                if solver.value_of(lit) == LBool::Undef
-                    && !solver.constraint_enqueue(!lit, ci)
-                {
+                if solver.value_of(lit) == LBool::Undef && !solver.constraint_enqueue(!lit, ci) {
                     return false;
                 }
             }
@@ -56,9 +58,7 @@ impl Constraint for AtMost {
         }
         if self.n_true == self.threshold {
             for &lit in &self.lits {
-                if solver.value_of(lit) == LBool::Undef
-                    && !solver.constraint_enqueue(!lit, ci)
-                {
+                if solver.value_of(lit) == LBool::Undef && !solver.constraint_enqueue(!lit, ci) {
                     return false;
                 }
             }

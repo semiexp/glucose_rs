@@ -133,9 +133,7 @@ impl GraphDivision {
         let adj = self.adj[p].clone();
         for (q, e) in adj {
             let state = self.edge_state[e];
-            if state == EdgeState::Connected
-                || (is_potential && state == EdgeState::Undecided)
-            {
+            if state == EdgeState::Connected || (is_potential && state == EdgeState::Undecided) {
                 self.compute_regions_dfs(q, id, region, region_id, is_potential);
             }
         }
@@ -155,7 +153,13 @@ impl GraphDivision {
                 continue;
             }
             regions[n_regions].clear();
-            self.compute_regions_dfs(i, n_regions, &mut regions[n_regions], region_id, is_potential);
+            self.compute_regions_dfs(
+                i,
+                n_regions,
+                &mut regions[n_regions],
+                region_id,
+                is_potential,
+            );
             n_regions += 1;
         }
         n_regions
@@ -396,7 +400,8 @@ impl GraphDivision {
                     continue;
                 }
                 if self.size_lb[p] > r_size {
-                    let reason_r = cached_reason.get_or_insert_with(|| self.reason_potential_region(r));
+                    let reason_r =
+                        cached_reason.get_or_insert_with(|| self.reason_potential_region(r));
                     let mut ret = reason_r.clone();
                     if let Some(x) = self.vertices[p].at_least(r_size + 1) {
                         assert_ne!(x, Lit::UNDEF);

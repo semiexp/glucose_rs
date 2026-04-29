@@ -1,5 +1,5 @@
-use crate::types::Lit;
 use crate::clause::ClauseIdx;
+use crate::types::Lit;
 
 #[derive(Clone, Copy, Debug)]
 pub struct Watcher {

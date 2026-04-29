@@ -47,7 +47,9 @@ pub struct ClauseDb {
 
 impl ClauseDb {
     pub fn new() -> Self {
-        ClauseDb { clauses: Vec::new() }
+        ClauseDb {
+            clauses: Vec::new(),
+        }
     }
 
     pub fn alloc(&mut self, lits: Vec<Lit>, learnt: bool) -> ClauseIdx {

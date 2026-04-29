@@ -413,7 +413,11 @@ impl Solver {
             }
             LBool::Undef => {
                 let v = lit.var() as usize;
-                self.assigns[v] = if lit.is_neg() { LBool::False } else { LBool::True };
+                self.assigns[v] = if lit.is_neg() {
+                    LBool::False
+                } else {
+                    LBool::True
+                };
                 self.level[v] = self.decision_level() as u32;
                 self.reason[v] = CLAUSE_UNDEF;
                 self.nc_reason[v] = Some(ci);
@@ -530,18 +534,17 @@ impl Solver {
     fn unchecked_enqueue(&mut self, lit: Lit, reason: ClauseIdx) {
         let v = lit.var() as usize;
         debug_assert!(self.assigns[v] == LBool::Undef);
-        self.assigns[v] = if lit.is_neg() { LBool::False } else { LBool::True };
+        self.assigns[v] = if lit.is_neg() {
+            LBool::False
+        } else {
+            LBool::True
+        };
         self.level[v] = self.decision_level() as u32;
         self.reason[v] = reason;
         self.nc_reason[v] = None;
         self.trail.push(lit);
         // Increment pending counts for constraints watching this literal
-        Self::add_num_pending_static(
-            &self.constr_watches,
-            &mut self.constr_pending,
-            lit,
-            1,
-        );
+        Self::add_num_pending_static(&self.constr_watches, &mut self.constr_pending, lit, 1);
     }
 
     fn attach_clause(&mut self, cref: ClauseIdx) {
@@ -552,13 +555,35 @@ impl Solver {
         // Convention: watcher stored at `lit` is triggered when `lit` becomes FALSE.
         // In propagate we read watches[false_lit] where false_lit = !p.
         if len == 2 {
-            self.watches_bin
-                .add(lit0, Watcher { cref, blocker: lit1 });
-            self.watches_bin
-                .add(lit1, Watcher { cref, blocker: lit0 });
+            self.watches_bin.add(
+                lit0,
+                Watcher {
+                    cref,
+                    blocker: lit1,
+                },
+            );
+            self.watches_bin.add(
+                lit1,
+                Watcher {
+                    cref,
+                    blocker: lit0,
+                },
+            );
         } else {
-            self.watches.add(lit0, Watcher { cref, blocker: lit1 });
-            self.watches.add(lit1, Watcher { cref, blocker: lit0 });
+            self.watches.add(
+                lit0,
+                Watcher {
+                    cref,
+                    blocker: lit1,
+                },
+            );
+            self.watches.add(
+                lit1,
+                Watcher {
+                    cref,
+                    blocker: lit0,
+                },
+            );
         }
     }
 
@@ -567,12 +592,8 @@ impl Solver {
         let lit0 = self.db.clauses[cref as usize].lits[0];
         let lit1 = self.db.clauses[cref as usize].lits[1];
         if len == 2 {
-            self.watches_bin
-                .get_mut(lit0)
-                .retain(|w| w.cref != cref);
-            self.watches_bin
-                .get_mut(lit1)
-                .retain(|w| w.cref != cref);
+            self.watches_bin.get_mut(lit0).retain(|w| w.cref != cref);
+            self.watches_bin.get_mut(lit1).retain(|w| w.cref != cref);
         } else {
             self.watches.get_mut(lit0).retain(|w| w.cref != cref);
             self.watches.get_mut(lit1).retain(|w| w.cref != cref);
@@ -582,9 +603,7 @@ impl Solver {
     fn is_locked(&self, cref: ClauseIdx) -> bool {
         let lit0 = self.db.clauses[cref as usize].lits[0];
         let v = lit0.var() as usize;
-        self.value_lit(lit0) == LBool::True
-            && self.nc_reason[v].is_none()
-            && self.reason[v] == cref
+        self.value_lit(lit0) == LBool::True && self.nc_reason[v].is_none() && self.reason[v] == cref
     }
 
     fn ensure_binary_clause_first_lit_true(&mut self, cref: ClauseIdx) {
@@ -649,7 +668,10 @@ impl Solver {
                 let first = self.db.clauses[cref as usize].lits[0];
 
                 if self.value_lit(first) == LBool::True {
-                    ws[j] = Watcher { cref, blocker: first };
+                    ws[j] = Watcher {
+                        cref,
+                        blocker: first,
+                    };
                     j += 1;
                     i += 1;
                     continue;
@@ -667,7 +689,13 @@ impl Solver {
                 if let Some(k) = new_watch {
                     self.db.clauses[cref as usize].lits.swap(1, k);
                     let new_lit = self.db.clauses[cref as usize].lits[1];
-                    self.watches.add(new_lit, Watcher { cref, blocker: first });
+                    self.watches.add(
+                        new_lit,
+                        Watcher {
+                            cref,
+                            blocker: first,
+                        },
+                    );
                     i += 1;
                     continue 'outer;
                 }
@@ -752,12 +780,7 @@ impl Solver {
     }
 
     // Recursively check if `p` is redundant given the current learned clause
-    fn lit_redundant(
-        &mut self,
-        p: Lit,
-        abs_levels: u32,
-        to_clear: &mut Vec<Var>,
-    ) -> bool {
+    fn lit_redundant(&mut self, p: Lit, abs_levels: u32, to_clear: &mut Vec<Var>) -> bool {
         // Cannot minimize through constraint-propagated literals
         if self.nc_reason[p.var() as usize].is_some() {
             return false;
@@ -1054,9 +1077,7 @@ impl Solver {
             match self.order_heap.remove_max(&self.activity) {
                 None => break,
                 Some(v) => {
-                    if self.assigns[v as usize] == LBool::Undef
-                        && self.decision[v as usize]
-                    {
+                    if self.assigns[v as usize] == LBool::Undef && self.decision[v as usize] {
                         next = v;
                         break;
                     }
@@ -1073,8 +1094,7 @@ impl Solver {
     // ── Reduce learned clause DB ───────────────
     fn reduce_db(&mut self) {
         // Collect locked clause indices
-        let mut locked_set: std::collections::HashSet<ClauseIdx> =
-            std::collections::HashSet::new();
+        let mut locked_set: std::collections::HashSet<ClauseIdx> = std::collections::HashSet::new();
         for &r in &self.reason {
             if r != CLAUSE_UNDEF {
                 locked_set.insert(r);
@@ -1108,12 +1128,7 @@ impl Solver {
             let len = self.db.clauses[cref as usize].lits.len();
             let del = self.db.clauses[cref as usize].header.deleted;
 
-            if del
-                || (lbd > 2
-                    && len > 2
-                    && !locked_set.contains(&cref)
-                    && removed < limit)
-            {
+            if del || (lbd > 2 && len > 2 && !locked_set.contains(&cref) && removed < limit) {
                 if !del {
                     removed += 1;
                     // Detach from the correct watch lists (binary / long).
@@ -1237,8 +1252,7 @@ impl Solver {
 
                 if should_restart {
                     let should_block = self.trail_queue.is_valid()
-                        && self.trail_queue.avg() * self.r_factor
-                            > self.trail.len() as f64;
+                        && self.trail_queue.avg() * self.r_factor > self.trail.len() as f64;
                     if !should_block {
                         self.restarts += 1;
                         self.backtrack(0);

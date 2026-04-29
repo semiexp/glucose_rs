@@ -37,7 +37,12 @@ impl Xor {
         let vars: Vec<Var> = vars_set.into_iter().collect();
         let n = vars.len() as i32;
         let value = vec![-1; vars.len()];
-        Xor { vars, value, parity, n_undecided: n }
+        Xor {
+            vars,
+            value,
+            parity,
+            n_undecided: n,
+        }
     }
 
     fn var_index(&self, v: Var) -> usize {
@@ -49,7 +54,7 @@ impl Constraint for Xor {
     fn initialize(&mut self, solver: &mut Solver, ci: ConstraintIdx) -> bool {
         for &v in &self.vars {
             solver.add_watch(Lit::new(v, false), ci); // positive lit
-            solver.add_watch(Lit::new(v, true), ci);  // negative lit
+            solver.add_watch(Lit::new(v, true), ci); // negative lit
         }
         let vars = self.vars.clone();
         for &v in &vars {

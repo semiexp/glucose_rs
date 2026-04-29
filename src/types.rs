@@ -38,7 +38,11 @@ pub enum LBool {
 
 impl From<bool> for LBool {
     fn from(b: bool) -> LBool {
-        if b { LBool::True } else { LBool::False }
+        if b {
+            LBool::True
+        } else {
+            LBool::False
+        }
     }
 }
 

@@ -83,7 +83,11 @@ impl ActiveVerticesConnected {
         self.parent[v] = parent;
 
         let mut lowlink = self.rank[v];
-        let mut subtree_active = if self.state[v] == NodeState::Active { 1 } else { 0 };
+        let mut subtree_active = if self.state[v] == NodeState::Active {
+            1
+        } else {
+            0
+        };
 
         let adj = self.adj[v].clone();
         for w in adj {
@@ -237,7 +241,11 @@ impl UnionFind {
         let nac_updated = self.n_active_clusters
             - (if self.n_active[p] > 0 { 1 } else { 0 })
             - (if self.n_active[q] > 0 { 1 } else { 0 })
-            + (if self.n_active[p] + self.n_active[q] > 0 { 1 } else { 0 });
+            + (if self.n_active[p] + self.n_active[q] > 0 {
+                1
+            } else {
+                0
+            });
         self.update_parent(p, self.parent[p] + self.parent[q]);
         self.update_parent(q, p as i32);
         self.update_n_active(p, self.n_active[p] + self.n_active[q]);
@@ -245,7 +253,11 @@ impl UnionFind {
         self.update_n_active_clusters(nac_updated);
     }
     fn add_active_count(&mut self, p: usize, d: i32) {
-        let nac_before = if self.n_active[self.root(p)] > 0 { 1 } else { 0 };
+        let nac_before = if self.n_active[self.root(p)] > 0 {
+            1
+        } else {
+            0
+        };
         let r = self.root(p);
         self.update_n_active(r, self.n_active[r] + d);
         let nac_after = if self.n_active[r] > 0 { 1 } else { 0 };
@@ -302,11 +314,7 @@ impl Constraint for ActiveVerticesConnected {
         }
 
         // Watch both literals for each vertex
-        let mut watch_lits: Vec<Lit> = self
-            .lits
-            .iter()
-            .flat_map(|&l| [l, !l])
-            .collect();
+        let mut watch_lits: Vec<Lit> = self.lits.iter().flat_map(|&l| [l, !l]).collect();
         watch_lits.sort();
         watch_lits.dedup();
         for l in watch_lits {

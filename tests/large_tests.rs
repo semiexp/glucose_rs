@@ -1,11 +1,11 @@
+use glucose_rs::constraints::graph_division::OptionalOrderEncoding;
+use glucose_rs::constraints::order_encoding_linear::LinearTerm;
+use glucose_rs::constraints::{
+    ActiveVerticesConnected, AtMost, DirectEncodingExtensionSupports, GraphDivision,
+    OrderEncodingLinear, Xor,
+};
 use glucose_rs::solver::Solver;
 use glucose_rs::types::{LBool, Lit};
-use glucose_rs::constraints::{
-    AtMost, Xor, OrderEncodingLinear, DirectEncodingExtensionSupports,
-    ActiveVerticesConnected, GraphDivision,
-};
-use glucose_rs::constraints::order_encoding_linear::LinearTerm;
-use glucose_rs::constraints::graph_division::OptionalOrderEncoding;
 
 // ── Core helpers ──────────────────────────────────────────────────────────────
 
@@ -320,21 +320,24 @@ fn count_num_atmost_patterns(n: usize, groups: &[Vec<i32>], thresholds: &[i32]) 
     // For each bit-assignment over n vars, check that each group satisfies its threshold.
     (0u32..1u32 << n)
         .filter(|&bits| {
-            groups.iter().zip(thresholds.iter()).all(|(group, &thresh)| {
-                let count: i32 = group
-                    .iter()
-                    .map(|&v| {
-                        if v >= 0 {
-                            ((bits >> (v as u32)) & 1) as i32
-                        } else {
-                            // Negative v represents a negated literal (C++ ~k convention).
-                            // (!v) gives the variable index; count is 1 when var is FALSE.
-                            1 - ((bits >> ((!v) as u32)) & 1) as i32
-                        }
-                    })
-                    .sum();
-                count <= thresh
-            })
+            groups
+                .iter()
+                .zip(thresholds.iter())
+                .all(|(group, &thresh)| {
+                    let count: i32 = group
+                        .iter()
+                        .map(|&v| {
+                            if v >= 0 {
+                                ((bits >> (v as u32)) & 1) as i32
+                            } else {
+                                // Negative v represents a negated literal (C++ ~k convention).
+                                // (!v) gives the variable index; count is 1 when var is FALSE.
+                                1 - ((bits >> ((!v) as u32)) & 1) as i32
+                            }
+                        })
+                        .sum();
+                    count <= thresh
+                })
         })
         .count()
 }
@@ -359,7 +362,10 @@ fn atmost_test_pattern(n: usize, groups: &[Vec<i32>], thresholds: &[i32]) {
         solver.add_constraint(Box::new(AtMost::new(lits, thresh)));
     }
     let actual = count_num_assignments(&mut solver, &vars);
-    assert_eq!(expected, actual, "atmost_pattern n={n} groups={groups:?} thresholds={thresholds:?}");
+    assert_eq!(
+        expected, actual,
+        "atmost_pattern n={n} groups={groups:?} thresholds={thresholds:?}"
+    );
 }
 
 /// Multiple AtMost constraints with positive and negated literals.
@@ -424,12 +430,7 @@ fn test_xor_dimension() {
 // ── OrderEncodingLinear constraint tests ──────────────────────────────────────
 
 fn count_num_ip_assignments(domains: &[Vec<i32>], coefs: &[Vec<i32>]) -> usize {
-    fn helper(
-        idx: usize,
-        domains: &[Vec<i32>],
-        coefs: &[Vec<i32>],
-        vals: &mut Vec<i32>,
-    ) -> usize {
+    fn helper(idx: usize, domains: &[Vec<i32>], coefs: &[Vec<i32>], vals: &mut Vec<i32>) -> usize {
         if idx == domains.len() {
             for coef_row in coefs {
                 let constant = *coef_row.last().unwrap();
@@ -636,9 +637,10 @@ fn count_valid_assignments_direct(
             for (var_ids, supports) in constraints {
                 // At least one support must match
                 let ok = supports.iter().any(|support| {
-                    support.iter().zip(var_ids.iter()).all(|(&s, &vid)| {
-                        s == -1 || s == vals[vid] as i32
-                    })
+                    support
+                        .iter()
+                        .zip(var_ids.iter())
+                        .all(|(&s, &vid)| s == -1 || s == vals[vid] as i32)
                 });
                 if !ok {
                     return 0;
@@ -767,27 +769,15 @@ fn test_direct_encoding_extension_supports_count() {
         &[
             (
                 vec![0, 1, 2],
-                vec![
-                    vec![0, -1, -1],
-                    vec![-1, 0, -1],
-                    vec![-1, -1, 0],
-                ],
+                vec![vec![0, -1, -1], vec![-1, 0, -1], vec![-1, -1, 0]],
             ),
             (
                 vec![1, 2, 4],
-                vec![
-                    vec![1, -1, -1],
-                    vec![-1, 2, -1],
-                    vec![-1, -1, 3],
-                ],
+                vec![vec![1, -1, -1], vec![-1, 2, -1], vec![-1, -1, 3]],
             ),
             (
                 vec![0, 2, 3],
-                vec![
-                    vec![2, -1, -1],
-                    vec![-1, 2, -1],
-                    vec![-1, -1, 3],
-                ],
+                vec![vec![2, -1, -1], vec![-1, 2, -1], vec![-1, -1, 3]],
             ),
         ],
     );
@@ -831,9 +821,7 @@ fn enumerate_connected_subgraph_bruteforce(n: usize, edges: &[(usize, usize)]) -
                     queue.push_back(next);
                 }
             }
-            (0..n)
-                .filter(|&v| ((bits >> v) & 1) == 1)
-                .all(|v| seen[v])
+            (0..n).filter(|&v| ((bits >> v) & 1) == 1).all(|v| seen[v])
         })
         .count()
 }
@@ -856,11 +844,14 @@ fn active_vertices_connected_count_bruteforce(
         .filter(|&bits| {
             let is_active = |lit: Lit| -> bool {
                 let val = ((bits >> lit.var()) & 1) == 1;
-                if lit.is_neg() { !val } else { val }
+                if lit.is_neg() {
+                    !val
+                } else {
+                    val
+                }
             };
-            let active_vertices: Vec<usize> = (0..lits.len())
-                .filter(|&i| is_active(lits[i]))
-                .collect();
+            let active_vertices: Vec<usize> =
+                (0..lits.len()).filter(|&i| is_active(lits[i])).collect();
             if active_vertices.len() <= 1 {
                 return true;
             }
@@ -892,7 +883,11 @@ fn active_vertices_connected_count_bruteforce(
         .count()
 }
 
-fn active_vertices_connected_count_sat(n_vars: usize, lits: Vec<Lit>, edges: &[(usize, usize)]) -> usize {
+fn active_vertices_connected_count_sat(
+    n_vars: usize,
+    lits: Vec<Lit>,
+    edges: &[(usize, usize)],
+) -> usize {
     let mut solver = Solver::new();
     let vars: Vec<u32> = (0..n_vars).map(|_| solver.new_var()).collect();
     let mapped_lits: Vec<Lit> = lits
@@ -948,7 +943,7 @@ fn test_graph_propagation_on_init() {
 
     // Fix var1=active, var2=inactive before adding constraint
     solver.add_clause(&[Lit::new(vars[1], false)]); // var1 = active
-    solver.add_clause(&[Lit::new(vars[2], true)]);  // var2 = inactive
+    solver.add_clause(&[Lit::new(vars[2], true)]); // var2 = inactive
 
     solver.add_constraint(Box::new(ActiveVerticesConnected::new(lits, &edges)));
 
@@ -998,7 +993,8 @@ fn test_stress_random_sat_16_to_20vars() {
     for round in 0..rounds {
         let n_vars = 16 + (round % 5);
         let n_clauses = n_vars * 4;
-        let planted_assignment: Vec<bool> = (0..n_vars).map(|_| lcg_range(&mut seed, 2) == 0).collect();
+        let planted_assignment: Vec<bool> =
+            (0..n_vars).map(|_| lcg_range(&mut seed, 2) == 0).collect();
 
         let mut clauses = Vec::new();
         for _ in 0..n_clauses {
@@ -1226,8 +1222,18 @@ fn test_graph_division_cycle() {
 fn test_graph_division_complex() {
     // 3×3 grid (9 vertices, 12 edges)
     let grid3x3: Vec<(usize, usize)> = vec![
-        (0, 1), (1, 2), (3, 4), (4, 5), (6, 7), (7, 8),
-        (0, 3), (1, 4), (2, 5), (3, 6), (4, 7), (5, 8),
+        (0, 1),
+        (1, 2),
+        (3, 4),
+        (4, 5),
+        (6, 7),
+        (7, 8),
+        (0, 3),
+        (1, 4),
+        (2, 5),
+        (3, 6),
+        (4, 7),
+        (5, 8),
     ];
 
     let expected1 = enumerate_graph_division_naive(9, &grid3x3, &[]);
@@ -1235,7 +1241,15 @@ fn test_graph_division_complex() {
     assert_eq!(expected1, actual1, "3x3 grid no size constraints");
 
     let size_cands1: Vec<Vec<i32>> = vec![
-        vec![2, 3], vec![], vec![], vec![], vec![1, 3], vec![], vec![], vec![], vec![4, 5],
+        vec![2, 3],
+        vec![],
+        vec![],
+        vec![],
+        vec![1, 3],
+        vec![],
+        vec![],
+        vec![],
+        vec![4, 5],
     ];
     let expected2 = enumerate_graph_division_naive(9, &grid3x3, &size_cands1);
     let actual2 = enumerate_graph_division_by_sat(9, &grid3x3, &size_cands1);
@@ -1243,15 +1257,37 @@ fn test_graph_division_complex() {
 
     // 3×4 grid (12 vertices, 17 edges)
     let grid3x4: Vec<(usize, usize)> = vec![
-        (0, 1), (1, 2), (2, 3),
-        (4, 5), (5, 6), (6, 7),
-        (8, 9), (9, 10), (10, 11),
-        (0, 4), (1, 5), (2, 6), (3, 7),
-        (4, 8), (5, 9), (6, 10), (7, 11),
+        (0, 1),
+        (1, 2),
+        (2, 3),
+        (4, 5),
+        (5, 6),
+        (6, 7),
+        (8, 9),
+        (9, 10),
+        (10, 11),
+        (0, 4),
+        (1, 5),
+        (2, 6),
+        (3, 7),
+        (4, 8),
+        (5, 9),
+        (6, 10),
+        (7, 11),
     ];
     let size_cands2: Vec<Vec<i32>> = vec![
-        vec![4], vec![5], vec![3], vec![], vec![], vec![], vec![],
-        vec![], vec![], vec![], vec![], vec![],
+        vec![4],
+        vec![5],
+        vec![3],
+        vec![],
+        vec![],
+        vec![],
+        vec![],
+        vec![],
+        vec![],
+        vec![],
+        vec![],
+        vec![],
     ];
     let expected3 = enumerate_graph_division_naive(12, &grid3x4, &size_cands2);
     let actual3 = enumerate_graph_division_by_sat(12, &grid3x4, &size_cands2);
@@ -1265,15 +1301,24 @@ fn test_graph_division_out_of_range() {
     {
         let mut solver = Solver::new();
         let vertices: Vec<OptionalOrderEncoding> = vec![
-            OptionalOrderEncoding { lits: Vec::new(), values: vec![3] },
-            OptionalOrderEncoding { lits: Vec::new(), values: Vec::new() },
+            OptionalOrderEncoding {
+                lits: Vec::new(),
+                values: vec![3],
+            },
+            OptionalOrderEncoding {
+                lits: Vec::new(),
+                values: Vec::new(),
+            },
         ];
         let graph: Vec<(usize, usize)> = vec![(0, 1)];
         let edge_lits: Vec<Lit> = (0..1).map(|_| Lit::new(solver.new_var(), false)).collect();
         let c = GraphDivision::new(vertices, &graph, edge_lits);
         solver.add_constraint(Box::new(c));
-        assert_eq!(solver.solve(), LBool::False,
-            "vertex requiring size > total vertices must be UNSAT");
+        assert_eq!(
+            solver.solve(),
+            LBool::False,
+            "vertex requiring size > total vertices must be UNSAT"
+        );
     }
 
     // Case 2: vertex 0 requires size 3, but edge (1,2) is forced disconnected,
@@ -1281,9 +1326,18 @@ fn test_graph_division_out_of_range() {
     {
         let mut solver = Solver::new();
         let vertices: Vec<OptionalOrderEncoding> = vec![
-            OptionalOrderEncoding { lits: Vec::new(), values: vec![3] },
-            OptionalOrderEncoding { lits: Vec::new(), values: Vec::new() },
-            OptionalOrderEncoding { lits: Vec::new(), values: Vec::new() },
+            OptionalOrderEncoding {
+                lits: Vec::new(),
+                values: vec![3],
+            },
+            OptionalOrderEncoding {
+                lits: Vec::new(),
+                values: Vec::new(),
+            },
+            OptionalOrderEncoding {
+                lits: Vec::new(),
+                values: Vec::new(),
+            },
         ];
         let graph: Vec<(usize, usize)> = vec![(0, 1), (1, 2)];
         let edge_lits: Vec<Lit> = (0..2).map(|_| Lit::new(solver.new_var(), false)).collect();
@@ -1293,8 +1347,11 @@ fn test_graph_division_out_of_range() {
 
         let c = GraphDivision::new(vertices, &graph, edge_lits);
         solver.add_constraint(Box::new(c));
-        assert_eq!(solver.solve(), LBool::False,
-            "vertex requiring size 3 with max reachable 2 must be UNSAT");
+        assert_eq!(
+            solver.solve(),
+            LBool::False,
+            "vertex requiring size 3 with max reachable 2 must be UNSAT"
+        );
     }
 }
 
@@ -1339,7 +1396,8 @@ fn test_stress_graph_division() {
         let expected = enumerate_graph_division_naive(n, &graph, &size_cands);
         let actual = enumerate_graph_division_by_sat(n, &graph, &size_cands);
         assert_eq!(
-            expected, actual,
+            expected,
+            actual,
             "round={round} n={n} edges={} size_cands={size_cands:?}",
             graph.len()
         );
