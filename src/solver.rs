@@ -618,6 +618,7 @@ impl Solver {
 
     // ── BCP ────────────────────────────────────
     fn propagate(&mut self) -> Option<ConflictReason> {
+        let mut bin_ws = vec![];
         while self.qhead < self.trail.len() {
             let p = self.trail[self.qhead];
             self.qhead += 1;
@@ -625,12 +626,12 @@ impl Solver {
             let false_lit = !p;
 
             // ── Binary clause watches ──────────────
-            let bin_ws = std::mem::take(self.watches_bin.get_mut(false_lit));
+            std::mem::swap(&mut bin_ws, self.watches_bin.get_mut(false_lit));
             for &w in &bin_ws {
                 match self.value_lit(w.blocker) {
                     LBool::True => {}
                     LBool::False => {
-                        *self.watches_bin.get_mut(false_lit) = bin_ws;
+                        std::mem::swap(&mut bin_ws, self.watches_bin.get_mut(false_lit));
                         self.drain_pending_for_clause_conflict(p);
                         return Some(ConflictReason::Clause(w.cref));
                     }
@@ -639,7 +640,7 @@ impl Solver {
                     }
                 }
             }
-            *self.watches_bin.get_mut(false_lit) = bin_ws;
+            std::mem::swap(&mut bin_ws, self.watches_bin.get_mut(false_lit));
 
             // ── Long clause watches ────────────────
             let mut ws = std::mem::take(self.watches.get_mut(false_lit));
