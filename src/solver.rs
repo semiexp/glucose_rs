@@ -587,6 +587,16 @@ impl Solver {
             && self.reason[v] == cref
     }
 
+    fn ensure_binary_clause_first_lit_true(&mut self, cref: ClauseIdx) {
+        if self.db.clauses[cref as usize].lits.len() != 2 {
+            return;
+        }
+        let lit0 = self.db.clauses[cref as usize].lits[0];
+        if self.value_lit(lit0) == LBool::False {
+            self.db.clauses[cref as usize].lits.swap(0, 1);
+        }
+    }
+
     // ── BCP ────────────────────────────────────
     fn propagate(&mut self) -> Option<ConflictReason> {
         while self.qhead < self.trail.len() {
@@ -774,6 +784,7 @@ impl Solver {
                 to_clear.truncate(top);
                 return false;
             }
+            self.ensure_binary_clause_first_lit_true(r);
             let cl_len = self.db.clauses[r as usize].lits.len();
             for j in 1..cl_len {
                 let q = self.db.clauses[r as usize].lits[j];
@@ -828,17 +839,20 @@ impl Solver {
 
         let mut confl = initial_conflict;
 
-        loop {
+        'analyze_loop: loop {
             match confl {
                 ConflictReason::Clause(cref) => {
+                    // Defensive guard: decisions have no clause reason (`CLAUSE_UNDEF`).
+                    // When this appears here, treat it as an empty reason instead of
+                    // indexing into the clause arena with a sentinel value.
+                    if cref == CLAUSE_UNDEF {
+                        break 'analyze_loop;
+                    }
                     let start_j: usize = if p == Lit::UNDEF { 0 } else { 1 };
 
                     // For binary clauses used as reason: ensure p is at lits[0]
                     if p != Lit::UNDEF {
-                        let cl_len = self.db.clauses[cref as usize].lits.len();
-                        if cl_len == 2 && self.db.clauses[cref as usize].lits[0] != p {
-                            self.db.clauses[cref as usize].lits.swap(0, 1);
-                        }
+                        self.ensure_binary_clause_first_lit_true(cref);
                     }
 
                     if self.db.clauses[cref as usize].header.learnt {
@@ -1102,11 +1116,8 @@ impl Solver {
             {
                 if !del {
                     removed += 1;
-                    // Detach
-                    let lit0 = self.db.clauses[cref as usize].lits[0];
-                    let lit1 = self.db.clauses[cref as usize].lits[1];
-                    self.watches.get_mut(lit0).retain(|w| w.cref != cref);
-                    self.watches.get_mut(lit1).retain(|w| w.cref != cref);
+                    // Detach from the correct watch lists (binary / long).
+                    self.detach_clause(cref);
                     self.db.clauses[cref as usize].header.deleted = true;
                 }
             } else {
