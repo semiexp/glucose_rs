@@ -8,7 +8,6 @@ pub const CLAUSE_UNDEF: ClauseIdx = u32::MAX;
 pub struct ClauseHeader {
     pub lbd: u32,
     pub learnt: bool,
-    pub can_be_del: bool,
     pub mark: u8,
     pub deleted: bool,
 }
@@ -27,7 +26,6 @@ impl Clause {
             header: ClauseHeader {
                 lbd: 0,
                 learnt,
-                can_be_del: true,
                 mark: 0,
                 deleted: false,
             },
