@@ -5,6 +5,10 @@ use crate::constraint::{Constraint, ConstraintIdx};
 use crate::types::{LBool, Lit, Var, VAR_UNDEF};
 use crate::watch::{WatchList, Watcher};
 
+const RATIO_REMOVE_CLAUSES: usize = 2;
+const CONFLICTS_PER_VAR_DECAY_UPDATE: u64 = 5000;
+const VAR_DECAY_INCREMENT: f64 = 0.01;
+
 // ──────────────────────────────────────────────
 // ConflictReason
 // ──────────────────────────────────────────────
@@ -216,6 +220,7 @@ pub struct Solver {
     activity: Vec<f64>,
     var_inc: f64,
     var_decay: f64,
+    max_var_decay: f64,
 
     // Clause activity
     cla_inc: f64,
@@ -236,9 +241,14 @@ pub struct Solver {
     #[allow(dead_code)]
     first_reduce_db: u64,
     inc_reduce_db: u64,
+    special_inc_reduce_db: u64,
+    lb_lbd_frozen_clause: u32,
+    lb_size_minimizing_clause: usize,
+    lb_lbd_minimizing_clause: u32,
 
     // Statistics
     conflicts: u64,
+    conflicts_restarts: u64,
     decisions: u64,
     propagations: u64,
     pub restarts: u64,
@@ -297,6 +307,7 @@ impl Solver {
             activity: Vec::new(),
             var_inc: 1.0,
             var_decay: 0.8,
+            max_var_decay: 0.95,
             cla_inc: 1.0,
             clause_decay: 0.999,
             order_heap: OrderHeap::new(0),
@@ -308,7 +319,12 @@ impl Solver {
             next_reduce_db: 2000,
             first_reduce_db: 2000,
             inc_reduce_db: 300,
+            special_inc_reduce_db: 1000,
+            lb_lbd_frozen_clause: 30,
+            lb_size_minimizing_clause: 30,
+            lb_lbd_minimizing_clause: 6,
             conflicts: 0,
+            conflicts_restarts: 0,
             decisions: 0,
             propagations: 0,
             restarts: 0,
@@ -782,6 +798,44 @@ impl Solver {
         1u32 << (level & 31)
     }
 
+    /// Glucose's binary-resolution based conflict-clause minimization.
+    fn minimisation_with_binary_resolution(&mut self, out_learnt: &mut Vec<Lit>) {
+        if out_learnt.len() <= 1 {
+            return;
+        }
+
+        let lbd = self.compute_lbd(out_learnt);
+        if lbd > self.lb_lbd_minimizing_clause {
+            return;
+        }
+
+        self.perm_diff_timer += 1;
+        let marker = self.perm_diff_timer;
+        let p = !out_learnt[0];
+        let bin_watch_key = !p;
+
+        for &lit in out_learnt.iter().skip(1) {
+            self.perm_diff[lit.var() as usize] = marker;
+        }
+
+        for &w in self.watches_bin.get(bin_watch_key) {
+            let imp = w.blocker;
+            let v = imp.var() as usize;
+            if self.perm_diff[v] == marker && self.value_lit(imp) == LBool::True {
+                self.perm_diff[v] = marker - 1;
+            }
+        }
+
+        let mut minimized: Vec<Lit> = Vec::with_capacity(out_learnt.len());
+        minimized.push(out_learnt[0]);
+        for &lit in out_learnt.iter().skip(1) {
+            if self.perm_diff[lit.var() as usize] == marker {
+                minimized.push(lit);
+            }
+        }
+        *out_learnt = minimized;
+    }
+
     // Recursively check if `p` is redundant given the current learned clause
     fn lit_redundant(&mut self, p: Lit, abs_levels: u32, to_clear: &mut Vec<Var>) -> bool {
         // Cannot minimize through constraint-propagated literals
@@ -883,6 +937,17 @@ impl Solver {
 
                     if self.db.clauses[cref as usize].header.learnt {
                         self.cla_bump_activity(cref);
+                        let old_lbd = self.db.clauses[cref as usize].header.lbd;
+                        if old_lbd > 2 {
+                            let lits = self.db.clauses[cref as usize].lits.clone();
+                            let nblevels = self.compute_lbd(&lits);
+                            if nblevels + 1 < old_lbd {
+                                if old_lbd <= self.lb_lbd_frozen_clause {
+                                    self.db.clauses[cref as usize].header.can_be_del = false;
+                                }
+                                self.db.clauses[cref as usize].header.lbd = nblevels;
+                            }
+                        }
                     }
 
                     let cl_len = self.db.clauses[cref as usize].lits.len();
@@ -1002,6 +1067,10 @@ impl Solver {
         }
         learnt.truncate(j);
 
+        if self.constraints.is_empty() && learnt.len() <= self.lb_size_minimizing_clause {
+            self.minimisation_with_binary_resolution(&mut learnt);
+        }
+
         // Clear seen for all variables we touched
         for &v in &to_clear {
             self.seen[v as usize] = 0;
@@ -1119,7 +1188,23 @@ impl Solver {
             });
         }
 
-        let limit = self.learnts.len() / 2;
+        if !self.learnts.is_empty() {
+            let idx = self.learnts.len() / RATIO_REMOVE_CLAUSES;
+            if let Some(&probe) = self.learnts.get(idx) {
+                if self.db.clauses[probe as usize].header.lbd <= 3 {
+                    self.next_reduce_db += self.special_inc_reduce_db;
+                }
+            }
+            if self.db.clauses[*self.learnts.last().unwrap() as usize]
+                .header
+                .lbd
+                <= 5
+            {
+                self.next_reduce_db += self.special_inc_reduce_db;
+            }
+        }
+
+        let mut limit = self.learnts.len() / 2;
         let mut removed = 0usize;
         let mut new_learnts: Vec<ClauseIdx> = Vec::with_capacity(self.learnts.len());
 
@@ -1128,8 +1213,15 @@ impl Solver {
             let lbd = self.db.clauses[cref as usize].header.lbd;
             let len = self.db.clauses[cref as usize].lits.len();
             let del = self.db.clauses[cref as usize].header.deleted;
+            let can_be_del = self.db.clauses[cref as usize].header.can_be_del;
 
-            if del || (lbd > 2 && len > 2 && !locked_set.contains(&cref) && removed < limit) {
+            if del
+                || (lbd > 2
+                    && len > 2
+                    && can_be_del
+                    && !locked_set.contains(&cref)
+                    && removed < limit)
+            {
                 if !del {
                     removed += 1;
                     // Detach from the correct watch lists (binary / long).
@@ -1137,6 +1229,12 @@ impl Solver {
                     self.db.clauses[cref as usize].header.deleted = true;
                 }
             } else {
+                // Protected clauses (`can_be_del == false`) do not consume the removal
+                // quota, so we extend the scan window exactly like Glucose.
+                if !can_be_del {
+                    limit += 1;
+                }
+                self.db.clauses[cref as usize].header.can_be_del = true;
                 new_learnts.push(cref);
             }
         }
@@ -1212,6 +1310,12 @@ impl Solver {
                 }
 
                 self.conflicts += 1;
+                self.conflicts_restarts += 1;
+                if self.conflicts % CONFLICTS_PER_VAR_DECAY_UPDATE == 0
+                    && self.var_decay < self.max_var_decay
+                {
+                    self.var_decay = (self.var_decay + VAR_DECAY_INCREMENT).min(self.max_var_decay);
+                }
 
                 let (learnt_lits, btlevel) = self.analyze(conflict_reason);
                 let lbd = self.compute_lbd(&learnt_lits);
@@ -1258,6 +1362,7 @@ impl Solver {
                         self.restarts += 1;
                         self.backtrack(0);
                         self.lbd_queue.clear();
+                        self.conflicts_restarts = 0;
                         continue;
                     }
                 }
