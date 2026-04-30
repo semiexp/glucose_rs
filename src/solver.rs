@@ -1195,7 +1195,11 @@ impl Solver {
                     self.next_reduce_db += self.special_inc_reduce_db;
                 }
             }
-            if self.db.clauses[*self.learnts.last().unwrap() as usize].header.lbd <= 5 {
+            if self.db.clauses[*self.learnts.last().unwrap() as usize]
+                .header
+                .lbd
+                <= 5
+            {
                 self.next_reduce_db += self.special_inc_reduce_db;
             }
         }
