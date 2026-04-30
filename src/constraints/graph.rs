@@ -89,8 +89,9 @@ impl ActiveVerticesConnected {
             0
         };
 
-        let adj = self.adj[v].clone();
-        for w in adj {
+        let n_adj = self.adj[v].len();
+        for i in 0..n_adj {
+            let w = self.adj[v][i];
             if w as i32 == parent || self.state[w] == NodeState::Inactive {
                 continue;
             }
@@ -345,8 +346,13 @@ impl Constraint for ActiveVerticesConnected {
         solver.register_undo(p.var(), ci);
 
         // Update state for all vertices mapped to var(p)
-        let indices: Vec<usize> = self.vertex_indices_for_var(p.var()).collect();
-        for i in indices {
+        // let indices: Vec<usize> = self.vertex_indices_for_var(p.var()).collect();
+        let indices = {
+            let lo = self.var_to_idx.partition_point(|&(x, _)| x < p.var());
+            let hi = self.var_to_idx.partition_point(|&(x, _)| x <= p.var());
+            &self.var_to_idx[lo..hi]
+        };
+        for &(_, i) in indices {
             let val = solver.value_of(self.lits[i]);
             let s = match val {
                 LBool::True => NodeState::Active,
