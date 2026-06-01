@@ -618,7 +618,6 @@ impl Solver {
 
     // ── BCP ────────────────────────────────────
     fn propagate(&mut self) -> Option<ConflictReason> {
-        let mut bin_ws = vec![];
         while self.qhead < self.trail.len() {
             let p = self.trail[self.qhead];
             self.qhead += 1;
@@ -626,21 +625,49 @@ impl Solver {
             let false_lit = !p;
 
             // ── Binary clause watches ──────────────
-            std::mem::swap(&mut bin_ws, self.watches_bin.get_mut(false_lit));
-            for &w in &bin_ws {
+            let mut bin_ws = std::mem::take(self.watches_bin.get_mut(false_lit));
+            let mut i_bin = 0usize;
+            let mut j_bin = 0usize;
+            while i_bin < bin_ws.len() {
+                let w = bin_ws[i_bin];
+                i_bin += 1;
+
+                // Lazy cleanup: deleted clauses can leave stale watchers.
+                if self.db.clauses[w.cref as usize].header.deleted {
+                    continue;
+                }
+
                 match self.value_lit(w.blocker) {
-                    LBool::True => {}
+                    LBool::True => {
+                        bin_ws[j_bin] = w;
+                        j_bin += 1;
+                    }
                     LBool::False => {
-                        std::mem::swap(&mut bin_ws, self.watches_bin.get_mut(false_lit));
+                        // Keep current watcher and preserve remaining live watchers before return.
+                        bin_ws[j_bin] = w;
+                        j_bin += 1;
+                        while i_bin < bin_ws.len() {
+                            let wr = bin_ws[i_bin];
+                            i_bin += 1;
+                            if !self.db.clauses[wr.cref as usize].header.deleted {
+                                bin_ws[j_bin] = wr;
+                                j_bin += 1;
+                            }
+                        }
+                        bin_ws.truncate(j_bin);
+                        *self.watches_bin.get_mut(false_lit) = bin_ws;
                         self.drain_pending_for_clause_conflict(p);
                         return Some(ConflictReason::Clause(w.cref));
                     }
                     LBool::Undef => {
                         self.unchecked_enqueue(w.blocker, w.cref);
+                        bin_ws[j_bin] = w;
+                        j_bin += 1;
                     }
                 }
             }
-            std::mem::swap(&mut bin_ws, self.watches_bin.get_mut(false_lit));
+            bin_ws.truncate(j_bin);
+            *self.watches_bin.get_mut(false_lit) = bin_ws;
 
             // ── Long clause watches ────────────────
             let mut ws = std::mem::take(self.watches.get_mut(false_lit));
@@ -1132,8 +1159,6 @@ impl Solver {
             if del || (lbd > 2 && len > 2 && !locked_set.contains(&cref) && removed < limit) {
                 if !del {
                     removed += 1;
-                    // Detach from the correct watch lists (binary / long).
-                    self.detach_clause(cref);
                     self.db.clauses[cref as usize].header.deleted = true;
                 }
             } else {
@@ -1221,11 +1246,12 @@ impl Solver {
                 if learnt_lits.len() == 1 {
                     self.unchecked_enqueue(learnt_lits[0], CLAUSE_UNDEF);
                 } else {
-                    let cref = self.db.alloc(learnt_lits.clone(), true);
+                    let first_lit = learnt_lits[0];
+                    let cref = self.db.alloc(learnt_lits, true);
                     self.db.clauses[cref as usize].header.lbd = lbd;
                     self.learnts.push(cref);
                     self.attach_clause(cref);
-                    self.unchecked_enqueue(learnt_lits[0], cref);
+                    self.unchecked_enqueue(first_lit, cref);
                     self.cla_bump_activity(cref);
                 }
 
