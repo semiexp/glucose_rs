@@ -626,21 +626,45 @@ impl Solver {
             let false_lit = !p;
 
             // ── Binary clause watches ──────────────
-            std::mem::swap(&mut bin_ws, self.watches_bin.get_mut(false_lit));
-            for &w in &bin_ws {
+            bin_ws = std::mem::take(self.watches_bin.get_mut(false_lit));
+            let mut i = 0usize;
+            let mut j = 0usize;
+            while i < bin_ws.len() {
+                let w = bin_ws[i];
+                i += 1;
+                if self.db.clauses[w.cref as usize].header.deleted {
+                    continue;
+                }
                 match self.value_lit(w.blocker) {
-                    LBool::True => {}
+                    LBool::True => {
+                        bin_ws[j] = w;
+                        j += 1;
+                    }
                     LBool::False => {
-                        std::mem::swap(&mut bin_ws, self.watches_bin.get_mut(false_lit));
+                        bin_ws[j] = w;
+                        j += 1;
+                        while i < bin_ws.len() {
+                            let w2 = bin_ws[i];
+                            i += 1;
+                            if !self.db.clauses[w2.cref as usize].header.deleted {
+                                bin_ws[j] = w2;
+                                j += 1;
+                            }
+                        }
+                        bin_ws.truncate(j);
+                        *self.watches_bin.get_mut(false_lit) = bin_ws;
                         self.drain_pending_for_clause_conflict(p);
                         return Some(ConflictReason::Clause(w.cref));
                     }
                     LBool::Undef => {
                         self.unchecked_enqueue(w.blocker, w.cref);
+                        bin_ws[j] = w;
+                        j += 1;
                     }
                 }
             }
-            std::mem::swap(&mut bin_ws, self.watches_bin.get_mut(false_lit));
+            bin_ws.truncate(j);
+            *self.watches_bin.get_mut(false_lit) = bin_ws;
 
             // ── Long clause watches ────────────────
             let mut ws = std::mem::take(self.watches.get_mut(false_lit));
@@ -1094,14 +1118,6 @@ impl Solver {
 
     // ── Reduce learned clause DB ───────────────
     fn reduce_db(&mut self) {
-        // Collect locked clause indices
-        let mut locked_set: std::collections::HashSet<ClauseIdx> = std::collections::HashSet::new();
-        for &r in &self.reason {
-            if r != CLAUSE_UNDEF {
-                locked_set.insert(r);
-            }
-        }
-
         // Sort learnts: worst first (high LBD, low activity)
         {
             let clauses = &self.db.clauses;
@@ -1129,11 +1145,9 @@ impl Solver {
             let len = self.db.clauses[cref as usize].lits.len();
             let del = self.db.clauses[cref as usize].header.deleted;
 
-            if del || (lbd > 2 && len > 2 && !locked_set.contains(&cref) && removed < limit) {
+            if del || (lbd > 2 && len > 2 && !self.is_locked(cref) && removed < limit) {
                 if !del {
                     removed += 1;
-                    // Detach from the correct watch lists (binary / long).
-                    self.detach_clause(cref);
                     self.db.clauses[cref as usize].header.deleted = true;
                 }
             } else {
