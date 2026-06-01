@@ -1121,18 +1121,10 @@ impl Solver {
 
     // ── Reduce learned clause DB ───────────────
     fn reduce_db(&mut self) {
-        // Collect locked clause indices
-        let mut locked_set: std::collections::HashSet<ClauseIdx> = std::collections::HashSet::new();
-        for &r in &self.reason {
-            if r != CLAUSE_UNDEF {
-                locked_set.insert(r);
-            }
-        }
-
         // Sort learnts: worst first (high LBD, low activity)
         {
             let clauses = &self.db.clauses;
-            self.learnts.sort_by(|&a, &b| {
+            self.learnts.sort_unstable_by(|&a, &b| {
                 let ca = &clauses[a as usize];
                 let cb = &clauses[b as usize];
                 // Higher LBD is worse; among equal LBD, lower activity is worse
@@ -1155,8 +1147,9 @@ impl Solver {
             let lbd = self.db.clauses[cref as usize].header.lbd;
             let len = self.db.clauses[cref as usize].lits.len();
             let del = self.db.clauses[cref as usize].header.deleted;
+            let locked = self.is_locked(cref);
 
-            if del || (lbd > 2 && len > 2 && !locked_set.contains(&cref) && removed < limit) {
+            if del || (lbd > 2 && len > 2 && !locked && removed < limit) {
                 if !del {
                     removed += 1;
                     self.db.clauses[cref as usize].header.deleted = true;
