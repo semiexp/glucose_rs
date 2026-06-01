@@ -251,6 +251,8 @@ pub struct Solver {
 
     // Seen array for conflict analysis (reused across calls)
     seen: Vec<u8>,
+    analyze_toclear: Vec<Var>,
+    analyze_stack: Vec<Lit>,
 
     // perm_diff for LBD computation
     perm_diff: Vec<u64>,
@@ -315,6 +317,8 @@ impl Solver {
             model: Vec::new(),
             ok: true,
             seen: Vec::new(),
+            analyze_toclear: Vec::new(),
+            analyze_stack: Vec::new(),
             perm_diff: Vec::new(),
             perm_diff_timer: 0,
             constraints: Vec::new(),
@@ -810,12 +814,19 @@ impl Solver {
     }
 
     // Recursively check if `p` is redundant given the current learned clause
-    fn lit_redundant(&mut self, p: Lit, abs_levels: u32, to_clear: &mut Vec<Var>) -> bool {
+    fn lit_redundant(
+        &mut self,
+        p: Lit,
+        abs_levels: u32,
+        to_clear: &mut Vec<Var>,
+        stack: &mut Vec<Lit>,
+    ) -> bool {
         // Cannot minimize through constraint-propagated literals
         if self.nc_reason[p.var() as usize].is_some() {
             return false;
         }
-        let mut stack: Vec<Lit> = vec![p];
+        stack.clear();
+        stack.push(p);
         let top = to_clear.len();
 
         while let Some(lit) = stack.pop() {
@@ -874,13 +885,17 @@ impl Solver {
     /// the C++ behaviour that maintains consistent constraint state for `calc_reason`.
     fn analyze(&mut self, initial_conflict: ConflictReason) -> (Vec<Lit>, u32) {
         let current_level = self.decision_level() as u32;
-        let mut learnt: Vec<Lit> = vec![Lit::UNDEF];
+        let mut learnt: Vec<Lit> = Vec::with_capacity(16);
+        learnt.push(Lit::UNDEF);
         let mut btlevel: u32 = 0;
         let mut path_c: i32 = 0;
         let mut p = Lit::UNDEF;
         // C++ uses post-decrement: after loop, trail[index+1] is the found literal.
         let mut index = self.trail.len() as i32 - 1;
-        let mut to_clear: Vec<Var> = Vec::new();
+        let mut to_clear = std::mem::take(&mut self.analyze_toclear);
+        to_clear.clear();
+        let mut stack = std::mem::take(&mut self.analyze_stack);
+        stack.clear();
 
         // Grab enqueue_failure once; clear it so it is not re-used.
         let mut extra: Option<Lit> = if self.enqueue_failure == Lit::UNDEF {
@@ -1021,7 +1036,7 @@ impl Solver {
             let v = lit.var() as usize;
             if self.nc_reason[v].is_some()
                 || self.reason[v] == CLAUSE_UNDEF
-                || !self.lit_redundant(lit, abs_levels, &mut to_clear)
+                || !self.lit_redundant(lit, abs_levels, &mut to_clear, &mut stack)
             {
                 learnt[j] = lit;
                 j += 1;
@@ -1033,6 +1048,11 @@ impl Solver {
         for &v in &to_clear {
             self.seen[v as usize] = 0;
         }
+
+        to_clear.clear();
+        stack.clear();
+        self.analyze_toclear = to_clear;
+        self.analyze_stack = stack;
 
         (learnt, btlevel)
     }
