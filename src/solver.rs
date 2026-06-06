@@ -797,7 +797,7 @@ impl Solver {
             return;
         }
 
-        let p = !learnt[0];
+        let p = learnt[0];
         let learnt_vars: HashSet<Var> = learnt[1..].iter().map(|lit| lit.var()).collect();
         let mut removable_vars: HashSet<Var> = HashSet::new();
         for w in self.watches_bin.get(p) {
@@ -1069,6 +1069,14 @@ impl Solver {
 
         if learnt.len() > 1 {
             self.minimization_with_binary_resolution(&mut learnt);
+            if learnt.len() <= 1 {
+                btlevel = 0;
+                // Clear seen for all variables we touched
+                for &v in &to_clear {
+                    self.seen[v as usize] = 0;
+                }
+                return (learnt, btlevel);
+            }
             let mut max_i = 1usize;
             for i in 2..learnt.len() {
                 if self.level[learnt[i].var() as usize] > self.level[learnt[max_i].var() as usize] {
