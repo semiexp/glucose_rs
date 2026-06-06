@@ -1,4 +1,4 @@
-use std::collections::VecDeque;
+use std::collections::{HashSet, VecDeque};
 
 use crate::clause::{ClauseDb, ClauseIdx, CLAUSE_UNDEF};
 use crate::constraint::{Constraint, ConstraintIdx};
@@ -236,6 +236,8 @@ pub struct Solver {
     #[allow(dead_code)]
     first_reduce_db: u64,
     inc_reduce_db: u64,
+    lb_size_minimizing_clause: usize,
+    lb_lbd_minimizing_clause: u32,
 
     // Statistics
     conflicts: u64,
@@ -308,6 +310,8 @@ impl Solver {
             next_reduce_db: 2000,
             first_reduce_db: 2000,
             inc_reduce_db: 300,
+            lb_size_minimizing_clause: 30,
+            lb_lbd_minimizing_clause: 6,
             conflicts: 0,
             decisions: 0,
             propagations: 0,
@@ -782,6 +786,41 @@ impl Solver {
         1u32 << (level & 31)
     }
 
+    /// Additional conflict-clause minimization using binary implications
+    /// (Glucose `minimisationWithBinaryResolution`).
+    fn minimization_with_binary_resolution(&mut self, learnt: &mut Vec<Lit>) {
+        if learnt.len() <= 1 || learnt.len() > self.lb_size_minimizing_clause {
+            return;
+        }
+        let lbd = self.compute_lbd(learnt);
+        if lbd > self.lb_lbd_minimizing_clause {
+            return;
+        }
+
+        let p = !learnt[0];
+        let learnt_vars: HashSet<Var> = learnt[1..].iter().map(|lit| lit.var()).collect();
+        let mut removable_vars: HashSet<Var> = HashSet::new();
+        for w in self.watches_bin.get(p) {
+            let imp = w.blocker;
+            if learnt_vars.contains(&imp.var()) && self.value_lit(imp) == LBool::True {
+                removable_vars.insert(imp.var());
+            }
+        }
+        if removable_vars.is_empty() {
+            return;
+        }
+
+        let mut j = 1usize;
+        for i in 1..learnt.len() {
+            let lit = learnt[i];
+            if !removable_vars.contains(&lit.var()) {
+                learnt[j] = lit;
+                j += 1;
+            }
+        }
+        learnt.truncate(j);
+    }
+
     // Recursively check if `p` is redundant given the current learned clause
     fn lit_redundant(&mut self, p: Lit, abs_levels: u32, to_clear: &mut Vec<Var>) -> bool {
         // Cannot minimize through constraint-propagated literals
@@ -883,6 +922,32 @@ impl Solver {
 
                     if self.db.clauses[cref as usize].header.learnt {
                         self.cla_bump_activity(cref);
+                        let old_lbd = self.db.clauses[cref as usize].header.lbd;
+                        if old_lbd > 2 {
+                            let nblevels = {
+                                self.perm_diff_timer += 1;
+                                let timer = self.perm_diff_timer;
+                                let mut n = 0u32;
+                                let cl_len = self.db.clauses[cref as usize].lits.len();
+                                for i in 0..cl_len {
+                                    let lit = self.db.clauses[cref as usize].lits[i];
+                                    let lvl = self.level[lit.var() as usize] as usize;
+                                    if lvl > 0 {
+                                        if self.perm_diff.len() <= lvl {
+                                            self.perm_diff.resize(lvl + 1, 0);
+                                        }
+                                        if self.perm_diff[lvl] != timer {
+                                            self.perm_diff[lvl] = timer;
+                                            n += 1;
+                                        }
+                                    }
+                                }
+                                n
+                            };
+                            if nblevels + 1 < old_lbd {
+                                self.db.clauses[cref as usize].header.lbd = nblevels;
+                            }
+                        }
                     }
 
                     let cl_len = self.db.clauses[cref as usize].lits.len();
@@ -1001,6 +1066,20 @@ impl Solver {
             }
         }
         learnt.truncate(j);
+
+        if learnt.len() > 1 {
+            self.minimization_with_binary_resolution(&mut learnt);
+            let mut max_i = 1usize;
+            for i in 2..learnt.len() {
+                if self.level[learnt[i].var() as usize] > self.level[learnt[max_i].var() as usize] {
+                    max_i = i;
+                }
+            }
+            learnt.swap(1, max_i);
+            btlevel = self.level[learnt[1].var() as usize];
+        } else {
+            btlevel = 0;
+        }
 
         // Clear seen for all variables we touched
         for &v in &to_clear {
