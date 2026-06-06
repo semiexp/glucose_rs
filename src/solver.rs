@@ -141,7 +141,10 @@ impl OrderHeap {
         let v = self.heap[i];
         while i > 0 {
             let parent = (i - 1) / 2;
-            if activity[self.heap[parent] as usize] < activity[v as usize] {
+            if activity[self.heap[parent] as usize] < activity[v as usize]
+                || (activity[self.heap[parent] as usize] == activity[v as usize]
+                    && self.heap[parent] < v)
+            {
                 self.heap[i] = self.heap[parent];
                 self.pos[self.heap[i] as usize] = i;
                 i = parent;
@@ -161,12 +164,17 @@ impl OrderHeap {
             let right = 2 * i + 2;
             let mut largest = i;
             if left < n
-                && activity[self.heap[left] as usize] > activity[self.heap[largest] as usize]
+                && (activity[self.heap[left] as usize] > activity[self.heap[largest] as usize]
+                    || (activity[self.heap[left] as usize] == activity[self.heap[largest] as usize]
+                        && self.heap[left] > self.heap[largest]))
             {
                 largest = left;
             }
             if right < n
-                && activity[self.heap[right] as usize] > activity[self.heap[largest] as usize]
+                && (activity[self.heap[right] as usize] > activity[self.heap[largest] as usize]
+                    || (activity[self.heap[right] as usize]
+                        == activity[self.heap[largest] as usize]
+                        && self.heap[right] > self.heap[largest]))
             {
                 largest = right;
             }
