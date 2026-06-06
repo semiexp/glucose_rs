@@ -1283,6 +1283,19 @@ impl Solver {
             }
         }
     }
+
+    // stats
+    pub fn num_conflicts(&self) -> u64 {
+        self.conflicts
+    }
+
+    pub fn num_decisions(&self) -> u64 {
+        self.decisions
+    }
+
+    pub fn num_propagations(&self) -> u64 {
+        self.propagations
+    }
 }
 
 impl Default for Solver {
