@@ -364,8 +364,16 @@ impl Solver {
             size_lbd_queue: OPT_SIZE_LBD_QUEUE as f64,
             size_trail_queue: OPT_SIZE_TRAIL_QUEUE as f64,
             first_reduce_db: OPT_FIRST_REDUCE_DB,
-            inc_reduce_db: if OPT_CHANSEOK_HACK { 0 } else { OPT_INC_REDUCE_DB },
-            special_inc_reduce_db: if OPT_CHANSEOK_HACK { 0 } else { OPT_SPEC_INC_REDUCE_DB },
+            inc_reduce_db: if OPT_CHANSEOK_HACK {
+                0
+            } else {
+                OPT_INC_REDUCE_DB
+            },
+            special_inc_reduce_db: if OPT_CHANSEOK_HACK {
+                0
+            } else {
+                OPT_SPEC_INC_REDUCE_DB
+            },
             lb_lbd_frozen_clause: OPT_LB_LBD_FROZEN_CLAUSE,
             chanseok_strategy: OPT_CHANSEOK_HACK,
             co_lbd_bound: OPT_CHANSEOK_LIMIT,
@@ -471,7 +479,9 @@ impl Solver {
         // Initialize only first time. Useful for incremental solving (not in // version), useless otherwise
         // Kept here for simplicity
         solver.lbd_queue.init_size(solver.size_lbd_queue as usize);
-        solver.trail_queue.init_size(solver.size_trail_queue as usize);
+        solver
+            .trail_queue
+            .init_size(solver.size_trail_queue as usize);
         solver.sum_lbd = 0.0;
         solver.nbclausesbeforereduce = solver.first_reduce_db;
         solver.stats.resize(CORE_STATS_SIZE, 0);
@@ -1280,11 +1290,11 @@ impl Solver {
         }
 
         /* ***************************************
-          Minimisation with binary clauses of the asserting clause
-          First of all : we look for small clauses
-          Then, we reduce clauses with small LBD.
-          Otherwise, this can be useless
-         */
+         Minimisation with binary clauses of the asserting clause
+         First of all : we look for small clauses
+         Then, we reduce clauses with small LBD.
+         Otherwise, this can be useless
+        */
         if !self.incremental && out_learnt.len() <= self.lb_size_minimizing_clause {
             self.minimisation_with_binary_resolution(out_learnt);
         }
@@ -2075,8 +2085,7 @@ impl Solver {
                     self.new_descent = true;
 
                     if self.randomize_on_restarts || self.fixed_randomize_on_restarts {
-                        self.random_descent_assignments =
-                            Self::drand(&mut self.random_seed) as u32;
+                        self.random_descent_assignments = Self::drand(&mut self.random_seed) as u32;
                     }
 
                     self.cancel_until(bt);
@@ -2305,8 +2314,8 @@ impl Solver {
         while status == LBool::Undef {
             status = self.search(if self.luby_restart {
                 // the parameter is useless in glucose, kept to allow modifications
-                (self.luby(self.restart_inc as f64, curr_restarts) * self.luby_restart_factor as f64)
-                    as i32
+                (self.luby(self.restart_inc as f64, curr_restarts)
+                    * self.luby_restart_factor as f64) as i32
             } else {
                 0
             });
@@ -2447,7 +2456,11 @@ impl Solver {
             writeln!(
                 f,
                 "{}{} 0",
-                if self.assumptions[i].is_neg() { "-" } else { "" },
+                if self.assumptions[i].is_neg() {
+                    "-"
+                } else {
+                    ""
+                },
                 Self::map_var(self.assumptions[i].var(), &mut map, &mut max) + 1
             )?;
         }

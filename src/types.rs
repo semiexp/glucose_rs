@@ -167,8 +167,10 @@ impl ClauseAllocator {
             0
         };
         let cid = self.memory.len() as CRef;
-        self.memory
-            .resize(self.memory.len() + Self::clause_word32_size(ps.len(), extra_size), 0);
+        self.memory.resize(
+            self.memory.len() + Self::clause_word32_size(ps.len(), extra_size),
+            0,
+        );
 
         // Header: mark = 0, learnt, extra_size, reloced = 0, lbd = 0, canbedel = 1,
         // exported = 0, oneWatched = 0, seen = 0.
@@ -208,7 +210,9 @@ impl ClauseAllocator {
             return;
         }
 
-        let lits: Vec<Lit> = (0..self.clause_size(*cr)).map(|i| self.lit(*cr, i)).collect();
+        let lits: Vec<Lit> = (0..self.clause_size(*cr))
+            .map(|i| self.lit(*cr, i))
+            .collect();
         let new_cr = to.alloc_(&lits, self.learnt(*cr), self.was_imported(*cr));
 
         // Copy extra data-fields:
