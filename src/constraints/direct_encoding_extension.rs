@@ -22,8 +22,6 @@ pub struct DirectEncodingExtensionSupports {
     undo_list: Vec<i32>,
     /// Active literals (one per propagate call).
     active_lits: Vec<Lit>,
-    /// Snapshot of active_lits at the time each literal was forced (for calc_reason).
-    reasons_prop: std::collections::HashMap<Lit, Vec<Lit>>,
 }
 
 impl DirectEncodingExtensionSupports {
@@ -43,7 +41,6 @@ impl DirectEncodingExtensionSupports {
             known_values,
             undo_list: Vec::new(),
             active_lits: Vec::new(),
-            reasons_prop: std::collections::HashMap::new(),
         }
     }
 
@@ -142,7 +139,6 @@ impl Constraint for DirectEncodingExtensionSupports {
                 if !occurrence[i][j + 1] {
                     // Value j is not supported – force it to FALSE
                     let forced = !self.vars[i][j];
-                    self.reasons_prop.insert(forced, self.active_lits.clone());
                     if !solver.constraint_enqueue(forced, ci) {
                         return false;
                     }
@@ -156,21 +152,15 @@ impl Constraint for DirectEncodingExtensionSupports {
     fn calc_reason(
         &mut self,
         _solver: &mut Solver,
-        p: Option<Lit>,
+        _p: Option<Lit>,
         extra: Option<Lit>,
         out_reason: &mut Vec<Lit>,
     ) {
-        let lits = if let Some(pl) = p {
-            // Use the snapshot taken when this literal was forced
-            self.reasons_prop
-                .get(&pl)
-                .map(|v| v.as_slice())
-                .unwrap_or(&self.active_lits)
-        } else {
-            // Conflict: active_lits is correct (called before any undos)
-            &self.active_lits
-        };
-        for &l in lits {
+        // `active_lits` always reflects the literals active at the time `p` was forced (or at the
+        // time of the conflict): the solver undoes the constraints of trail literals it passes
+        // during conflict analysis, so by the time this is called for `p`, the later literals have
+        // already been popped off `active_lits`.
+        for &l in &self.active_lits {
             out_reason.push(l);
         }
         if let Some(extra_lit) = extra {

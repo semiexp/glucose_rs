@@ -550,6 +550,11 @@ impl Solver {
         self.activity.push(act);
         self.seen.push(false);
         self.perm_diff.push(0);
+        // `perm_diff` is pushed one-per-variable (as in C++), but `computeLBD` indexes it by
+        // decision level, which can be as deep as `nVars` in the all-decisions case.  Keep one
+        // extra slot so that the level-`nVars` access is in bounds; the C++ `vec` instead relies
+        // on its over-allocated capacity for this.
+        self.perm_diff.resize(self.assigns.len() + 1, 0);
         self.polarity.push(sign);
         self.force_unsat.push(0);
         self.decision.push(false);
@@ -2852,9 +2857,9 @@ impl Solver {
 
     /// Counterpart of `Constraint::num_pending_propagation()` (the counter is maintained by the
     /// solver in this port; see `num_pending_propagation`).
-    pub fn num_pending(&self, ci: ConstraintIdx) -> usize {
+    pub fn num_pending(&self, ci: ConstraintIdx) -> i32 {
         debug_assert!(self.num_pending_propagation[ci] >= 0);
-        self.num_pending_propagation[ci] as usize
+        self.num_pending_propagation[ci]
     }
 
     // Statistics accessors (used by the cspuz_core backend):
