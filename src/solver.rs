@@ -2733,6 +2733,11 @@ impl Solver {
         self.trail_lim.len()
     }
 
+    /// Returns true if the literal `p` was assigned at the current decision level.
+    pub fn is_current_level(&self, p: Lit) -> bool {
+        self.decision_level() == self.level(p.var())
+    }
+
     /// Used to represent an abstraction of sets of decision levels.
     fn abstract_level(&self, x: Var) -> u32 {
         1u32 << (self.level(x) & 31)
