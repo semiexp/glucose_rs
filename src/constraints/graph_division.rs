@@ -428,10 +428,12 @@ impl GraphDivision {
         // ── Check 3a: Non-overlapping bounds sum ────────────────────────
         for r in 0..n_potential {
             let region = &self.potential_regions[r];
-            // Build (ub, lb, cell_id) tuples, sort by ub
+            // Build (ub, -lb, cell_id) tuples; sorting puts cells with the same ub in
+            // decreasing order of lb, so that the greedy scan below picks the cell with the
+            // largest lb in each ub group
             let mut cells: Vec<(i32, i32, usize)> = region
                 .iter()
-                .map(|&p| (self.size_ub[p], self.size_lb[p], p))
+                .map(|&p| (self.size_ub[p], -self.size_lb[p], p))
                 .collect();
             cells.sort();
 
@@ -439,11 +441,12 @@ impl GraphDivision {
             let mut min_required = 0i32;
             let mut non_overlapping: Vec<usize> = Vec::new();
 
-            for (ub, lb, p) in &cells {
-                if cur < *lb {
+            for &(ub, neg_lb, p) in &cells {
+                let lb = -neg_lb;
+                if cur < lb {
                     min_required += lb;
-                    cur = *ub;
-                    non_overlapping.push(*p);
+                    cur = ub;
+                    non_overlapping.push(p);
                 }
             }
 
