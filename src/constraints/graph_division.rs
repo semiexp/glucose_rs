@@ -326,7 +326,9 @@ impl GraphDivision {
                         let ret = self.reason_decided_connecting_path(u, v);
                         self.reasons_prop.insert(!self.edge_lits[e], ret);
                         // Enqueue ~edge_lits[e] (force connected)
-                        assert!(solver.constraint_enqueue(!self.edge_lits[e], ci));
+                        if solver.value_of(!self.edge_lits[e]) == LBool::Undef {
+                            assert!(solver.constraint_enqueue(!self.edge_lits[e], ci));
+                        }
                     }
                 }
             }
