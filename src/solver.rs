@@ -2733,6 +2733,11 @@ impl Solver {
         self.trail_lim.len()
     }
 
+    /// Returns the decision level at which the variable of literal `p` was assigned.
+    pub fn decision_level_of_literal(&self, p: Lit) -> i32 {
+        self.level(p.var())
+    }
+
     /// Returns true if the literal `p` was assigned at the current decision level.
     pub fn is_current_level(&self, p: Lit) -> bool {
         self.decision_level() == self.level(p.var())
